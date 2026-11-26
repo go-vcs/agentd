@@ -35,7 +35,7 @@ func wantMsg(t *testing.T, name string, err error, reason, msg string) {
 
 func TestReadTokenReasons(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := ReadToken(filepath.Join(dir, "nope")); err == nil || !strings.Contains(err.Error(), "no such file") {
+	if _, err := ReadToken(filepath.Join(dir, "nope")); err == nil || !strings.HasPrefix(err.Error(), "token file: ") {
 		t.Errorf("missing: %v", err)
 	}
 	if _, err := ReadToken(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {

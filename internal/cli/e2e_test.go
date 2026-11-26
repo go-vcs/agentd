@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -73,6 +74,9 @@ func tokenFile(t *testing.T) string {
 
 func startDaemon(t *testing.T) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the daemon refuses to serve where there is no peer credential check")
+	}
 	sock := filepath.Join(shortDir(t), "d", "s")
 	ctx, cancel := context.WithCancel(context.Background())
 	out, errb := &syncBuf{}, &syncBuf{}
@@ -200,7 +204,11 @@ func TestDaemonRefusals(t *testing.T) {
 	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", "ftp://x"), "scheme must be https")
 	f := filepath.Join(t.TempDir(), "file")
 	_ = os.WriteFile(f, nil, 0o600)
-	want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "socket directory")
+	if runtime.GOOS == "windows" {
+		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "no peer credential check")
+	} else {
+		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "socket directory")
+	}
 	if err := run("--token-file", tokenFile(t), "extra"); err == nil {
 		t.Error("a positional argument was accepted")
 	}
@@ -208,6 +216,7 @@ func TestDaemonRefusals(t *testing.T) {
 
 func TestDefaultTokenFileWithoutHome(t *testing.T) {
 	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "") // windows
 	if got := defaultTokenFile(); got != "" {
 		t.Errorf("defaultTokenFile without a home = %q", got)
 	}
