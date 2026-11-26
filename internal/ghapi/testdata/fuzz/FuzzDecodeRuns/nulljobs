@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"total_count\":1,\"workflow_runs\":[{\"id\":1,\"workflow_id\":2,\"event\":\"push\",\"head_sha\":\"\",\"status\":\"completed\",\"conclusion\":null}]}")
