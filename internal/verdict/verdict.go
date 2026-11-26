@@ -1,15 +1,11 @@
 // Package verdict decides whether one exact commit is green.
 //
-// It reproduces the rules fleet tool prwait (go-fleettools/prwait, package
-// main, so not importable) learned the hard way, as pure functions of recorded
-// observations:
+// The rules of "is this commit green" are fleet tool prwait's, and live ONCE, in
+// github.com/go-fleettools/prwait/judge (runs per head SHA, latest run per
+// (workflow, event), no conclusion is pending, zero jobs is red). This package
+// is the adapter: it keeps agentd's wire shapes and adds what is agentd's own.
 //
 //   - runs are read per head SHA, never per branch or pull request;
-//   - only the LATEST run per (workflow, event) is judged: a retrigger replaces
-//     a red run, and a manual dispatch never masks a red pull_request run;
-//   - a check or run with no conclusion yet is pending, never a pass;
-//   - a run that finished with ZERO jobs never started: it is red, never green,
-//     even when GitHub says "success" (prwait does not count jobs; this does);
 //   - nothing observed at all is pending, never green;
 //   - the verdict names the full commit it judged, and an observation about a
 //     different commit is refused, never merged in.
@@ -17,8 +13,9 @@ package verdict
 
 import (
 	"fmt"
-	"sort"
 	"strings"
+
+	pj "github.com/go-fleettools/prwait/judge"
 
 	"github.com/go-vcs/agentd/internal/oid"
 )
@@ -76,85 +73,54 @@ type Verdict struct {
 
 // Latest keeps the most recent run of each (workflow, event).
 func Latest(rs []Run) []Run {
-	type key struct {
-		id    int64
-		event string
+	in := make([]pj.Run, len(rs))
+	for i, r := range rs {
+		in[i] = toJudge(r)
 	}
-	best := map[key]Run{}
-	for _, r := range rs {
-		k := key{r.WorkflowID, r.Event}
-		cur, seen := best[k]
-		switch {
-		case !seen:
-		case r.Number > cur.Number:
-		case r.Number == cur.Number && r.Created > cur.Created:
-		default:
-			continue
-		}
-		best[k] = r
+	latest := pj.LatestRuns(in)
+	out := make([]Run, len(latest))
+	for i, r := range latest {
+		out[i] = fromJudge(r)
 	}
-	out := make([]Run, 0, len(best))
-	for _, r := range best {
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		switch {
-		case a.Name != b.Name:
-			return a.Name < b.Name
-		case a.Event != b.Event:
-			return a.Event < b.Event
-		}
-		return a.WorkflowID < b.WorkflowID
-	})
 	return out
 }
 
-// passing reports whether a finished conclusion is accepted. NEUTRAL and
-// SKIPPED are passes (a lane that excluded itself did its job); CANCELLED is
-// not: a cancelled lane ran nothing.
-func passing(c string) bool {
-	switch strings.ToLower(c) {
-	case "success", "neutral", "skipped":
-		return true
+func toJudge(r Run) pj.Run {
+	j := pj.Run{
+		ID: r.ID, Name: r.Name, Status: r.Status, HeadSHA: r.HeadSHA,
+		Conclusion: r.Conclusion, WorkflowID: r.WorkflowID, Event: r.Event,
+		Number: r.Number, Created: r.Created,
 	}
-	return false
+	if r.Jobs != JobsUnknown {
+		n := r.Jobs
+		j.Jobs = &n
+	}
+	return j
 }
 
-func judge(name, kind, status, conclusion string, jobs int, checkJobs bool) CheckResult {
-	r := CheckResult{Name: name, Kind: kind}
-	if !strings.EqualFold(status, "completed") {
-		r.State, r.Detail = Pending, "status "+nz(status)
-		return r
+func fromJudge(j pj.Run) Run {
+	r := Run{
+		ID: j.ID, Name: j.Name, Status: j.Status, HeadSHA: j.HeadSHA,
+		Conclusion: j.Conclusion, WorkflowID: j.WorkflowID, Event: j.Event,
+		Number: j.Number, Created: j.Created, Jobs: JobsUnknown,
 	}
-	if conclusion == "" {
-		// Finished, yet no conclusion read: absence is never evidence of a pass.
-		r.State, r.Detail = Pending, "completed with no conclusion"
-		return r
+	if j.Jobs != nil {
+		r.Jobs = *j.Jobs
 	}
-	if !passing(conclusion) {
-		r.State, r.Detail = Red, "conclusion "+strings.ToLower(conclusion)
-		return r
-	}
-	if checkJobs {
-		switch {
-		case jobs == 0:
-			r.State, r.Detail = Red, "ran with zero jobs: it never started"
-			return r
-		case jobs < 0:
-			r.State, r.Detail = Pending, "job count not read"
-			return r
-		}
-	}
-	r.State = Green
 	return r
 }
 
-func nz(s string) string {
-	if s == "" {
-		return "(none)"
+// judgeOne judges one lane with the shared rules. A workflow run (checkJobs)
+// also counts its jobs.
+func judgeOne(name, kind, status, conclusion string, jobs int, checkJobs bool) CheckResult {
+	var st pj.State
+	var detail string
+	if checkJobs {
+		st, detail = pj.RunState(toJudge(Run{Status: status, Conclusion: conclusion, Jobs: jobs}))
+	} else {
+		st, detail = pj.Classify(pj.Entry{Status: strings.ToUpper(status), Conclusion: strings.ToUpper(conclusion)})
 	}
-	return s
+	return CheckResult{Name: name, Kind: kind, State: State(st), Detail: detail}
 }
 
 // Judge decides the gate verdict of commit from what was observed for it.
@@ -182,14 +148,14 @@ func Judge(commit string, runs []Run, checks []Check) (Verdict, error) {
 		if name == "" {
 			name = "(unnamed)"
 		}
-		v.Checks = append(v.Checks, judge(name+" ("+r.Event+" run)", "workflow_run", r.Status, r.Conclusion, r.Jobs, true))
+		v.Checks = append(v.Checks, judgeOne(name+" ("+r.Event+" run)", "workflow_run", r.Status, r.Conclusion, r.Jobs, true))
 	}
 	for _, c := range checks {
 		name := c.Name
 		if name == "" {
 			name = "(unnamed)"
 		}
-		v.Checks = append(v.Checks, judge(name, "check_run", c.Status, c.Conclusion, 0, false))
+		v.Checks = append(v.Checks, judgeOne(name, "check_run", c.Status, c.Conclusion, 0, false))
 	}
 	var red, pending bool
 	for _, c := range v.Checks {

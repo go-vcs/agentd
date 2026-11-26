@@ -85,3 +85,20 @@ func TestLatestDeterministic(t *testing.T) {
 		t.Errorf("Latest = %+v", got)
 	}
 }
+
+// A lane with no name is reported as "(unnamed)", never as a blank that reads
+// as nothing.
+func TestUnnamedLanesAreNamed(t *testing.T) {
+	r := run(1, 1, "push", 1, "completed", "success", 2)
+	r.Name = ""
+	v, err := Judge(sha, []Run{r}, []Check{chk("", "completed", "success")})
+	if err != nil || len(v.Checks) != 2 {
+		t.Fatalf("Judge = %+v, %v", v, err)
+	}
+	if got := v.Checks[0].Name; got != "(unnamed) (push run)" {
+		t.Errorf("run lane named %q", got)
+	}
+	if got := v.Checks[1].Name; got != "(unnamed)" {
+		t.Errorf("check lane named %q", got)
+	}
+}

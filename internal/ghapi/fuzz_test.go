@@ -43,6 +43,7 @@ func FuzzDecodeChecks(f *testing.F) {
 func FuzzDecodeJobCount(f *testing.F) {
 	seed(f)
 	f.Fuzz(func(t *testing.T, b []byte) {
+		defer noCrash(t)
 		if n, err := DecodeJobCount(b); err == nil && n < 0 {
 			t.Fatalf("negative job count %d", n)
 		}

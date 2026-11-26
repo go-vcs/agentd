@@ -69,7 +69,13 @@ func TestForeignUIDIsDropped(t *testing.T) {
 			_, _ = c.Read(make([]byte, 1)) // returns EOF when the daemon drops us
 		}
 	}()
-	go func() { _, _ = l.Accept() }()
+	crashed := make(chan any, 1)
+	go func() {
+		// Closing the listener below makes this Accept return its error; a crash
+		// here would kill the binary from a goroutine, so it is carried back.
+		defer func() { crashed <- recover() }()
+		_, _ = l.Accept()
+	}()
 	select {
 	case <-seen:
 	case <-time.After(3 * time.Second):
@@ -77,6 +83,13 @@ func TestForeignUIDIsDropped(t *testing.T) {
 	}
 	if got != uint32(os.Getuid()) {
 		t.Errorf("refused uid %d", got)
+	}
+	l.Close()
+	select {
+	case r := <-crashed:
+		reportCrash(t, r)
+	case <-time.After(3 * time.Second):
+		t.Error("Accept did not return after the listener was closed")
 	}
 }
 

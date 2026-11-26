@@ -67,6 +67,13 @@ func TestHelloThenVerdict(t *testing.T) {
 }
 
 func TestFailures(t *testing.T) {
+	// A failure path that crashes instead of refusing is a failed assertion,
+	// so the guards in call are held by this test and not by luck.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("a failure path crashed instead of refusing: %v", r)
+		}
+	}()
 	ctx := context.Background()
 	// nobody listens
 	if err := New(filepath.Join(os.TempDir(), "agentd-nobody-here.sock"), "x").Hello(ctx); aerr.As(err).Reason != aerr.Unavailable {

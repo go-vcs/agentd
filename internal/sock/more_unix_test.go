@@ -3,11 +3,13 @@
 package sock
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestForeignOwnedDirIsRefused(t *testing.T) {
@@ -27,7 +29,7 @@ func TestListenFailureReasons(t *testing.T) {
 	root := sockDir(t)
 	f := filepath.Join(root, "file")
 	_ = os.WriteFile(f, nil, 0o600)
-	if _, err := Listen(filepath.Join(f, "d", "s")); err == nil || !strings.Contains(err.Error(), "not a directory") {
+	if _, err := Listen(filepath.Join(f, "d", "s")); err == nil || !strings.HasPrefix(err.Error(), "socket directory: ") || !strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("dir under a file: %v", err)
 	}
 	// a path longer than sun_path cannot be bound: refused, and not through a later step
@@ -55,6 +57,7 @@ func TestListenFailureReasons(t *testing.T) {
 }
 
 func TestMissingDirIsRefused(t *testing.T) {
+	defer noCrash(t)
 	if err := checkDirOwner(filepath.Join(sockDir(t), "absent"), os.Getuid()); err == nil {
 		t.Error("a missing directory was accepted")
 	}
@@ -74,6 +77,7 @@ func TestSocketModeIs0600(t *testing.T) {
 }
 
 func TestPeerUIDRefusesAConnectionItCannotRead(t *testing.T) {
+	defer noCrash(t)
 	if _, err := peerUID(&net.UnixConn{}); err == nil {
 		t.Error("a zero connection gave a uid")
 	}
@@ -97,13 +101,39 @@ func TestPeerUIDRefusesAConnectionItCannotRead(t *testing.T) {
 }
 
 func TestAcceptAfterCloseFails(t *testing.T) {
+	defer noCrash(t)
 	l, err := Listen(filepath.Join(sockDir(t), "d", "s"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	l.Close()
-	if c, err := l.Accept(); err == nil {
-		c.Close()
-		t.Error("accepted on a closed listener")
+	// Accept must RETURN the error: without its guard it would loop on a closed
+	// listener forever, so the call is bounded and a hang is an assertion.
+	type result struct {
+		c   net.Conn
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		// A crash inside Accept would kill the whole test binary from this
+		// goroutine, where no deferred recover of the test can see it.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{nil, fmt.Errorf("Accept crashed: %v", r)}
+			}
+		}()
+		c, err := l.Accept()
+		done <- result{c, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil && strings.HasPrefix(r.err.Error(), "Accept crashed") {
+			t.Error(r.err)
+		} else if r.err == nil {
+			r.c.Close()
+			t.Error("accepted on a closed listener")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Accept does not return on a closed listener")
 	}
 }
