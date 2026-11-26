@@ -160,9 +160,6 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 	if resp.StatusCode/100 != 2 {
 		return statusError(resp, b)
 	}
-	if out == nil {
-		return nil
-	}
 	if err := json.Unmarshal(b, out); err != nil {
 		return aerr.New(aerr.Unavailable, "upstream answer unreadable")
 	}

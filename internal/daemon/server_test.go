@@ -244,14 +244,14 @@ func TestMergeGate(t *testing.T) {
 		if tc.name == "head moved" {
 			var e wire.ErrorBody
 			_ = json.Unmarshal(b, &e)
-			if e.Error.CurrentCommit != c2 {
+			if e.Error == nil || e.Error.CurrentCommit != c2 {
 				t.Errorf("head moved did not name the current commit: %s", b)
 			}
 		}
 		if tc.name == "red" {
 			var e wire.ErrorBody
 			_ = json.Unmarshal(b, &e)
-			if e.Error.Commit != c1 || len(e.Error.Checks) != 1 {
+			if e.Error == nil || e.Error.Commit != c1 || len(e.Error.Checks) != 1 {
 				t.Errorf("red did not name commit and checks: %s", b)
 			}
 		}
