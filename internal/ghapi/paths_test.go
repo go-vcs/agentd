@@ -92,6 +92,9 @@ func TestDecodersRefuse(t *testing.T) {
 	if _, _, err := DecodeChecks([]byte("{")); err == nil {
 		t.Error("checks")
 	}
+	if _, err := DecodeJobCount([]byte("{")); err == nil || strings.Contains(err.Error(), "no total_count") {
+		t.Errorf("syntax error must be reported as one: %v", err)
+	}
 	for _, b := range []string{"{", `{}`, `{"total_count":null}`, `{"total_count":-1}`} {
 		if _, err := DecodeJobCount([]byte(b)); err == nil {
 			t.Errorf("job count %q accepted", b)
