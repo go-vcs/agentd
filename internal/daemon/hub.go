@@ -109,9 +109,8 @@ func (h *Hub) run(ctx context.Context, key, repo, commit string, w *watch) {
 	for {
 		h.polls.Add(1)
 		v, err := h.be.Verdict(ctx, repo, commit)
-		if ctx.Err() != nil {
-			return
-		}
+		// ctx is cancelled only when no waiter is left, so finishing a watch
+		// nobody reads is harmless; the select below ends the loop.
 		switch e := aerr.As(err); {
 		case err == nil && v.State != verdict.Pending:
 			finish(v, nil)

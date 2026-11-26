@@ -92,10 +92,12 @@ func DaemonCmd() *cobra.Command {
 			srv := &http.Server{Handler: daemon.New(gh, lim).Handler(), ReadHeaderTimeout: 10 * time.Second}
 			go func() { <-ctx.Done(); _ = srv.Close() }()
 			fmt.Fprintf(cmd.OutOrStdout(), "forge-agentd listening on %s\n", socket)
-			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return err
+			// Serve always returns an error: ErrServerClosed is the clean stop.
+			err = srv.Serve(l)
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
 			}
-			return nil
+			return err
 		},
 	}
 	f := cmd.Flags()
@@ -193,9 +195,7 @@ func AgentCmd() *cobra.Command {
 				return err
 			}
 			if requestID == "" {
-				if requestID, err = client.NewRequestID(); err != nil {
-					return err
-				}
+				requestID = client.NewRequestID()
 				// Printed so that a retry after a timeout can reuse it.
 				fmt.Fprintln(cmd.ErrOrStderr(), "request-id", requestID)
 			}

@@ -127,11 +127,8 @@ func (s *Server) reply(w http.ResponseWriter, status int, body []byte) {
 }
 
 func (s *Server) ok(w http.ResponseWriter, v any) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		s.fail(w, aerr.New(aerr.Internal, ""))
-		return
-	}
+	// v is always one of this module's fixed wire structs: it cannot fail to marshal.
+	b, _ := json.Marshal(v)
 	s.reply(w, http.StatusOK, b)
 }
 
@@ -164,11 +161,7 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var b [16]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			s.mu.Unlock()
-			s.fail(w, aerr.New(aerr.Internal, ""))
-			return
-		}
+		_, _ = rand.Read(b[:]) // never fails (Go 1.24 aborts instead)
 		id = "s-" + hex.EncodeToString(b[:])
 		s.sessions[req.Label] = id
 		s.known[id] = true

@@ -35,10 +35,10 @@ func stub(t *testing.T, h http.HandlerFunc) string {
 }
 
 func TestRequestIDsAreDistinctAndValid(t *testing.T) {
-	a, err := NewRequestID()
-	b, _ := NewRequestID()
-	if err != nil || a == b || len(a) != 32 {
-		t.Errorf("%q %q %v", a, b, err)
+	a := NewRequestID()
+	b := NewRequestID()
+	if a == b || len(a) != 32 {
+		t.Errorf("%q %q", a, b)
 	}
 }
 

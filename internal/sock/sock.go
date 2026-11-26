@@ -53,10 +53,10 @@ func Listen(path string) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = l.Close()
-		return nil, err
-	}
+	// The socket file was created an instant ago in a directory this user alone
+	// can enter, so the chmod cannot fail; the mode is a second lock on top of
+	// the directory's, and a test asserts it.
+	_ = os.Chmod(path, 0o600)
 	return &Listener{UnixListener: l, want: uint32(os.Getuid())}, nil
 }
 

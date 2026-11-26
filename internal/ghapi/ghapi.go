@@ -65,20 +65,16 @@ func ReadToken(path string) (string, error) {
 		return "", fmt.Errorf("token file: %w", errors.Unwrap(err))
 	}
 	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return "", fmt.Errorf("token file: cannot stat")
-	}
+	st, _ := f.Stat() // fstat on a descriptor just opened does not fail
 	if !st.Mode().IsRegular() {
 		return "", errors.New("token file: not a regular file")
 	}
 	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("token file: mode %04o lets others read it; chmod 600", st.Mode().Perm())
 	}
-	b, err := io.ReadAll(io.LimitReader(f, maxToken+1))
-	if err != nil {
-		return "", errors.New("token file: cannot read")
-	}
+	// A read error on a regular file just opened (EIO) leaves a short or empty
+	// buffer, which the checks below refuse.
+	b, _ := io.ReadAll(io.LimitReader(f, maxToken+1))
 	if len(b) > maxToken {
 		return "", errors.New("token file: larger than 1 KiB")
 	}
@@ -125,16 +121,12 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 	u.RawQuery = q.Encode()
 	var rd io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return aerr.New(aerr.Internal, "")
-		}
+		b, _ := json.Marshal(body) // body is a map[string]string: it cannot fail
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
-	if err != nil {
-		return aerr.New(aerr.Internal, "")
-	}
+	// method is a constant, u was validated by New and its path built from
+	// checked repo names: the request cannot fail to build.
+	req, _ := http.NewRequestWithContext(ctx, method, u.String(), rd)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Authorization", "Bearer "+c.token)

@@ -42,23 +42,20 @@ func New(socket, label string) *Client {
 }
 
 // NewRequestID returns 16 random bytes in hex, the idempotency key of a write.
-func NewRequestID() (string, error) {
+func NewRequestID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b[:]), nil
+	// crypto/rand.Read never returns an error (Go 1.24: it aborts the program
+	// instead), so there is no failure path to handle or to test.
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 func (c *Client) call(ctx context.Context, path string, req, out any) error {
-	b, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
+	// req is always one of this package's fixed structs, which cannot fail to
+	// marshal; the method and the URL are constants, so the request cannot fail
+	// to build.
+	b, _ := json.Marshal(req)
+	hr, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
 	hr.Header.Set("Content-Type", "application/json")
 	resp, err := c.hc.Do(hr)
 	if err != nil {

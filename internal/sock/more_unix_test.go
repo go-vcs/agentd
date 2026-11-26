@@ -3,6 +3,7 @@
 package sock
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,48 @@ func TestListenFailureReasons(t *testing.T) {
 		if _, err := Listen(p); err == nil || !strings.Contains(err.Error(), "remove") {
 			t.Errorf("stale socket in a read-only dir: %v", err)
 		}
+	}
+}
+
+func TestMissingDirIsRefused(t *testing.T) {
+	if err := checkDirOwner(filepath.Join(sockDir(t), "absent"), os.Getuid()); err == nil {
+		t.Error("a missing directory was accepted")
+	}
+}
+
+func TestSocketModeIs0600(t *testing.T) {
+	p := filepath.Join(sockDir(t), "d", "s")
+	l, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	st, err := os.Stat(p)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("socket mode: %v %v", st, err)
+	}
+}
+
+func TestPeerUIDRefusesAConnectionItCannotRead(t *testing.T) {
+	if _, err := peerUID(&net.UnixConn{}); err == nil {
+		t.Error("a zero connection gave a uid")
+	}
+	p := filepath.Join(sockDir(t), "d", "s")
+	l, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	c, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: p, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid, err := peerUID(c); err != nil || uid != uint32(os.Getuid()) {
+		t.Errorf("live connection: %d %v", uid, err)
+	}
+	c.Close()
+	if _, err := peerUID(c); err == nil {
+		t.Error("a closed connection gave a uid")
 	}
 }
 
