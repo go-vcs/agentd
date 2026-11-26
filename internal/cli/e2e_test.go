@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -123,7 +124,7 @@ func agent(t *testing.T, sock string, args ...string) (stdout, stderr string, er
 	c.SetOut(&o)
 	c.SetErr(&e)
 	c.SetArgs(append([]string{"--socket", sock, "--label", "t"}, args...))
-	err = c.Execute()
+	survives(t, fmt.Sprint(args), func() { err = c.Execute() })
 	return o.String(), e.String(), err
 }
 
@@ -192,7 +193,9 @@ func TestDaemonRefusals(t *testing.T) {
 		c.SetOut(&bytes.Buffer{})
 		c.SetErr(&bytes.Buffer{})
 		c.SetArgs(args)
-		return c.ExecuteContext(ctx)
+		var err error
+		survives(t, fmt.Sprint(args), func() { err = c.ExecuteContext(ctx) })
+		return err
 	}
 	want := func(err error, sub string) {
 		t.Helper()

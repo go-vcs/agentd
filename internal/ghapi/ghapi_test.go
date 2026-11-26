@@ -128,6 +128,7 @@ func TestVerdictRefusesAbbreviationBeforeAnyRequest(t *testing.T) {
 }
 
 func TestVerdictJobCountAbsentIsNotZero(t *testing.T) {
+	defer noCrash(t)
 	c, _ := newClient(t, files("runs_one_success.json", "checks_green.json", map[string]string{"11": "jobs_nofield.json"}))
 	_, err := c.Verdict(context.Background(), "o/r", sha)
 	if e := aerr.As(err); e.Reason != aerr.Unavailable {
@@ -249,6 +250,7 @@ func TestNewRefusesCleartextRemote(t *testing.T) {
 }
 
 func TestReadToken(t *testing.T) {
+	defer noCrash(t)
 	dir := t.TempDir()
 	write := func(name, content string, mode os.FileMode) string {
 		p := filepath.Join(dir, name)

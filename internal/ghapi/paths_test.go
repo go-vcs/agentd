@@ -3,6 +3,7 @@ package ghapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,7 +34,47 @@ func wantMsg(t *testing.T, name string, err error, reason, msg string) {
 	}
 }
 
+// noCrash is deferred by a test whose subject must REFUSE: a refusal path that
+// crashes instead is a failed assertion, so the guard that makes the code
+// refuse is held by the test and not by whatever a deleted guard dereferences.
+func noCrash(t *testing.T) {
+	t.Helper()
+	reportCrash(t, recover())
+}
+
+type failer interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+type recorded struct{ msgs []string }
+
+func (*recorded) Helper() {}
+func (r *recorded) Errorf(format string, args ...any) {
+	r.msgs = append(r.msgs, fmt.Sprintf(format, args...))
+}
+
+func reportCrash(t failer, r any) {
+	t.Helper()
+	if r != nil {
+		t.Errorf("a refusal path crashed instead of refusing: %v", r)
+	}
+}
+
+func TestReportCrash(t *testing.T) {
+	var r recorded
+	reportCrash(&r, nil)
+	if len(r.msgs) != 0 {
+		t.Fatalf("no crash, yet reported: %q", r.msgs)
+	}
+	reportCrash(&r, "boom")
+	if len(r.msgs) != 1 || !strings.Contains(r.msgs[0], "boom") {
+		t.Fatalf("a crash was not reported: %q", r.msgs)
+	}
+}
+
 func TestReadTokenReasons(t *testing.T) {
+	defer noCrash(t)
 	dir := t.TempDir()
 	if _, err := ReadToken(filepath.Join(dir, "nope")); err == nil || !strings.HasPrefix(err.Error(), "token file: ") {
 		t.Errorf("missing: %v", err)
@@ -49,6 +90,7 @@ func TestReadTokenReasons(t *testing.T) {
 }
 
 func TestNewReasons(t *testing.T) {
+	defer noCrash(t)
 	for _, u := range []string{"", "api.github.com", "http://[::1"} {
 		if _, err := New(u, "t"); err == nil || !strings.Contains(err.Error(), "not a URL") {
 			t.Errorf("%q: %v", u, err)
@@ -57,6 +99,7 @@ func TestNewReasons(t *testing.T) {
 }
 
 func TestTransportFailures(t *testing.T) {
+	defer noCrash(t)
 	srv := httptest.NewServer(http.NotFoundHandler())
 	c, _ := New(srv.URL, "t")
 	srv.Close()
@@ -86,6 +129,7 @@ func TestTransportFailures(t *testing.T) {
 }
 
 func TestDecodersRefuse(t *testing.T) {
+	defer noCrash(t)
 	if _, _, err := DecodeRuns([]byte("{")); err == nil {
 		t.Error("runs")
 	}

@@ -1,5 +1,12 @@
 # agentd
 
+<img src="https://raw.githubusercontent.com/go-vcs/brand/main/avatar/go-vcs-agentd.png" width="96" alt="go-vcs agentd" align="right">
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-vcs/agentd.svg)](https://pkg.go.dev/github.com/go-vcs/agentd)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![CI](https://github.com/go-vcs/agentd/actions/workflows/ci.yml/badge.svg)](https://github.com/go-vcs/agentd/actions/workflows/ci.yml)
+[![Landing](https://img.shields.io/badge/landing-go--vcs.github.io-0079A8.svg)](https://go-vcs.github.io) [![Docs](https://img.shields.io/badge/docs-go--vcs.github.io%2Fdocs-0079A8.svg)](https://go-vcs.github.io/docs/main/)
+
 `forge-agentd` is the local daemon of the go-vcs agent-VCS design
 (milestone A0, see `docs/agent-vcs.md` in go-vcs/forge). It sits between many
 agent sessions on one machine and GitHub, so that:

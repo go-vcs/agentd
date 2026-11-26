@@ -11,12 +11,12 @@ func TestUnfinishedLaneIsPendingWhateverItsConclusion(t *testing.T) {
 		{"", "success", "status (none)"},
 		{"", "", "status (none)"},
 	} {
-		r := judge("lane", "run", tc.status, tc.conclusion, 3, true)
+		r := judgeOne("lane", "run", tc.status, tc.conclusion, 3, true)
 		if r.State != Pending || r.Detail != tc.detail {
 			t.Errorf("%+v: got %s %q", tc, r.State, r.Detail)
 		}
 	}
-	if r := judge("lane", "run", "COMPLETED", "success", 3, true); r.State != Green {
+	if r := judgeOne("lane", "run", "COMPLETED", "success", 3, true); r.State != Green {
 		t.Errorf("status is case-insensitive: %s", r.State)
 	}
 }
