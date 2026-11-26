@@ -1,0 +1,241 @@
+// Package cli holds the two cobra command trees: forge-agentd (the daemon) and
+// forge-agent (the client agents call).
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/go-vcs/agentd/internal/aerr"
+	"github.com/go-vcs/agentd/internal/client"
+	"github.com/go-vcs/agentd/internal/daemon"
+	"github.com/go-vcs/agentd/internal/ghapi"
+	"github.com/go-vcs/agentd/internal/sock"
+	"github.com/go-vcs/agentd/internal/verdict"
+)
+
+// osExit is replaceable by tests.
+var osExit = os.Exit
+
+// Exit codes of forge-agent.
+const (
+	ExitGreen   = 0
+	ExitError   = 1
+	ExitRed     = 3 // a verdict that is RED, or a refused merge
+	ExitPending = 4 // still PENDING when the wait ended
+)
+
+// DefaultSocket is where the daemon listens and the client looks.
+func DefaultSocket() string {
+	d, err := os.UserConfigDir()
+	if err != nil {
+		d = os.TempDir() // never reached on a machine with a home; refused later if unsafe
+	}
+	return filepath.Join(d, "forge-agentd", "agentd.sock")
+}
+
+// Main runs a command tree and exits with its code.
+func Main(root *cobra.Command) {
+	if err := root.Execute(); err != nil {
+		var ee exitError
+		if errors.As(err, &ee) {
+			osExit(ee.code)
+			return
+		}
+		osExit(ExitError)
+	}
+}
+
+type exitError struct{ code int }
+
+func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
+
+// DaemonCmd is forge-agentd.
+func DaemonCmd() *cobra.Command {
+	var socket, tokenFile, apiURL string
+	var poll time.Duration
+	cmd := &cobra.Command{
+		Use:           "forge-agentd",
+		Short:         "local agent-VCS daemon with a GitHub backend",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			tok, err := ghapi.ReadToken(tokenFile)
+			if err != nil {
+				return err
+			}
+			gh, err := ghapi.New(apiURL, tok)
+			if err != nil {
+				return err
+			}
+			lim := daemon.DefaultLimits()
+			lim.PollInterval = poll
+			l, err := sock.Listen(socket)
+			if err != nil {
+				return err
+			}
+			l.Refused = func(uid uint32, err error) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "refused a connection from uid %d\n", uid)
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			srv := &http.Server{Handler: daemon.New(gh, lim).Handler(), ReadHeaderTimeout: 10 * time.Second}
+			go func() { <-ctx.Done(); _ = srv.Close() }()
+			fmt.Fprintf(cmd.OutOrStdout(), "forge-agentd listening on %s\n", socket)
+			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&socket, "socket", DefaultSocket(), "unix socket to listen on (its directory is created 0700)")
+	f.StringVar(&tokenFile, "token-file", defaultTokenFile(), "file holding the GitHub token (mode 0600); never read from argv or the environment")
+	f.StringVar(&apiURL, "api-url", "https://api.github.com", "GitHub REST base URL (https, or http on loopback)")
+	f.DurationVar(&poll, "poll-interval", 15*time.Second, "time between upstream reads for a commit being waited on")
+	return cmd
+}
+
+func defaultTokenFile() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(h, ".github-token")
+}
+
+// AgentCmd is forge-agent.
+func AgentCmd() *cobra.Command {
+	var socket, label string
+	root := &cobra.Command{
+		Use:           "forge-agent",
+		Short:         "talk to forge-agentd: verdicts, waits and gated merges for exact commits",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	root.PersistentFlags().StringVar(&socket, "socket", DefaultSocket(), "the daemon's socket")
+	root.PersistentFlags().StringVar(&label, "label", "", "this session's name (required)")
+
+	open := func(cmd *cobra.Command) (*client.Client, error) {
+		if label == "" {
+			return nil, errors.New("--label is required: every session has its own identity")
+		}
+		c := client.New(socket, label)
+		if err := c.Hello(cmd.Context()); err != nil {
+			return nil, report(cmd, err)
+		}
+		return c, nil
+	}
+	emit := func(cmd *cobra.Command, v any) {
+		b, _ := json.Marshal(v)
+		fmt.Fprintln(cmd.OutOrStdout(), string(b))
+	}
+
+	verdictCmd := &cobra.Command{
+		Use:   "verdict <owner/repo> <full-commit-id>",
+		Short: "print the gate verdict of one exact commit (exit 0 green, 3 red, 4 pending)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			r, err := c.Verdict(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return report(cmd, err)
+			}
+			emit(cmd, r)
+			return verdictExit(r.State, false)
+		},
+	}
+	var timeout time.Duration
+	waitCmd := &cobra.Command{
+		Use:   "wait <owner/repo> <full-commit-id>",
+		Short: "wait for the verdict of one exact commit; one poller per machine serves every waiter",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			r, err := c.Wait(cmd.Context(), args[0], args[1], timeout)
+			if err != nil {
+				return report(cmd, err)
+			}
+			emit(cmd, r)
+			return verdictExit(r.State, r.TimedOut)
+		},
+	}
+	waitCmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "longest wait")
+
+	var method, requestID string
+	var pr int
+	mergeCmd := &cobra.Command{
+		Use:   "merge <owner/repo> <pr> <full-commit-id>",
+		Short: "merge a pull request only if the commit named is its head and is green",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := fmt.Sscanf(args[1], "%d", &pr); err != nil || pr <= 0 {
+				return errors.New("pr must be a positive number")
+			}
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			if requestID == "" {
+				if requestID, err = client.NewRequestID(); err != nil {
+					return err
+				}
+				// Printed so that a retry after a timeout can reuse it.
+				fmt.Fprintln(cmd.ErrOrStderr(), "request-id", requestID)
+			}
+			r, err := c.Merge(cmd.Context(), requestID, args[0], pr, args[2], method)
+			if err != nil {
+				return report(cmd, err)
+			}
+			emit(cmd, r)
+			return nil
+		},
+	}
+	mergeCmd.Flags().StringVar(&method, "method", "merge", "merge, squash or rebase")
+	mergeCmd.Flags().StringVar(&requestID, "request-id", "", "32 hex digits; reuse it to retry safely (default: random)")
+	root.AddCommand(verdictCmd, waitCmd, mergeCmd)
+	return root
+}
+
+func verdictExit(s verdict.State, timedOut bool) error {
+	switch {
+	case timedOut || s == verdict.Pending:
+		return exitError{ExitPending}
+	case s == verdict.Red:
+		return exitError{ExitRed}
+	}
+	return nil
+}
+
+// report prints a refusal as its structured JSON body on stderr and picks the
+// exit code: a refusal of the gate is 3, anything else 1.
+func report(cmd *cobra.Command, err error) error {
+	e := aerr.As(err)
+	b, _ := json.Marshal(struct {
+		Error *aerr.Error `json:"error"`
+	}{e})
+	fmt.Fprintln(cmd.ErrOrStderr(), string(b))
+	switch e.Reason {
+	case aerr.VerdictRed, aerr.RefMoved, aerr.VerdictPending, aerr.Conflict, aerr.ChangeClosed:
+		return exitError{ExitRed}
+	}
+	return exitError{ExitError}
+}
+
+var _ = context.Background

@@ -5,7 +5,9 @@ package wire
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
 	"regexp"
 	"unicode/utf8"
 
@@ -74,6 +76,10 @@ type ErrorBody struct {
 func Decode(r io.Reader, max int64, v any) error {
 	b, err := io.ReadAll(io.LimitReader(r, max+1))
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			return aerr.New(aerr.BoundExceeded, "request larger than the bound")
+		}
 		return aerr.New(aerr.Malformed, "request unreadable")
 	}
 	if int64(len(b)) > max {

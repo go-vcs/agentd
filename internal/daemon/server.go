@@ -121,7 +121,9 @@ func (s *Server) bound(next http.Handler) http.Handler {
 func (s *Server) reply(w http.ResponseWriter, status int, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(append(body, '\n'))
+	// Two writes, never append: body may be shared by several replays.
+	_, _ = w.Write(body)
+	_, _ = w.Write([]byte{'\n'})
 }
 
 func (s *Server) ok(w http.ResponseWriter, v any) {
