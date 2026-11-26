@@ -94,6 +94,11 @@ func startDaemon(t *testing.T) string {
 		}
 	})
 	for i := 0; i < 200; i++ {
+		select {
+		case err := <-done:
+			t.Fatalf("daemon exited before listening: %v %s", err, errb.String())
+		default:
+		}
 		if conn, err := net.Dial("unix", sock); err == nil {
 			conn.Close()
 			if !strings.Contains(out.String(), "listening on "+sock) {
@@ -175,26 +180,86 @@ func TestEndToEnd(t *testing.T) {
 func TestDaemonRefusals(t *testing.T) {
 	gh := fakeGitHub(t)
 	good := filepath.Join(shortDir(t), "d", "s")
+	// A daemon that wrongly starts must not hang the suite: it is cut at 3 s.
 	run := func(args ...string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
 		c := DaemonCmd()
 		c.SetOut(&bytes.Buffer{})
 		c.SetErr(&bytes.Buffer{})
 		c.SetArgs(args)
-		return c.Execute()
+		return c.ExecuteContext(ctx)
 	}
-	if err := run("--socket", good, "--token-file", filepath.Join(t.TempDir(), "none"), "--api-url", gh); err == nil {
-		t.Error("a missing token file was accepted")
+	want := func(err error, sub string) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), sub) {
+			t.Errorf("want an error containing %q, got %v", sub, err)
+		}
 	}
-	if err := run("--socket", good, "--token-file", tokenFile(t), "--api-url", "ftp://x"); err == nil {
-		t.Error("a bad api url was accepted")
-	}
+	want(run("--socket", good, "--token-file", filepath.Join(t.TempDir(), "none"), "--api-url", gh), "token file")
+	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", "ftp://x"), "scheme must be https")
 	f := filepath.Join(t.TempDir(), "file")
 	_ = os.WriteFile(f, nil, 0o600)
-	if err := run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh); err == nil {
-		t.Error("an unusable socket path was accepted")
-	}
+	want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "socket directory")
 	if err := run("--token-file", tokenFile(t), "extra"); err == nil {
 		t.Error("a positional argument was accepted")
+	}
+}
+
+func TestDefaultTokenFileWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if got := defaultTokenFile(); got != "" {
+		t.Errorf("defaultTokenFile without a home = %q", got)
+	}
+}
+
+func TestAgentRefusals(t *testing.T) {
+	sock := startDaemon(t)
+	one := func(errs string) {
+		t.Helper()
+		if n := strings.Count(strings.TrimSpace(errs), "\n"); n != 0 || errs == "" {
+			t.Errorf("want exactly one stderr line, got %q", errs)
+		}
+	}
+	// wait with an abbreviation is a structured refusal
+	_, errs, err := agent(t, sock, "wait", "o/r", c1[:7], "--timeout", "1s")
+	if code(err) != ExitError || !strings.Contains(errs, `"reason":"ABBREVIATED_ID"`) {
+		t.Errorf("wait abbrev: %v %s", err, errs)
+	}
+	one(errs)
+	// verdict on a commit the upstream does not know about is a refusal, not green
+	_, errs, err = agent(t, sock, "verdict", "o/r", c2)
+	if code(err) == ExitGreen {
+		t.Errorf("verdict of another commit: %v %s", err, errs)
+	}
+	// merge of an abbreviated id
+	_, errs, err = agent(t, sock, "merge", "o/r", "7", c1[:7], "--request-id", strings.Repeat("0b", 16))
+	if code(err) != ExitError || !strings.Contains(errs, `"reason":"ABBREVIATED_ID"`) {
+		t.Errorf("merge abbrev: %v %s", err, errs)
+	}
+	// pr parse messages
+	for _, pr := range []string{"x", "0"} {
+		_, _, err = agent(t, sock, "merge", "o/r", pr, c1)
+		if err == nil || !strings.Contains(err.Error(), "pr must be a positive number") {
+			t.Errorf("pr %q: %v", pr, err)
+		}
+	}
+	// no label
+	c := AgentCmd()
+	c.SetOut(&bytes.Buffer{})
+	c.SetErr(&bytes.Buffer{})
+	c.SetArgs([]string{"--socket", sock, "verdict", "o/r", c1})
+	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "--label is required") {
+		t.Errorf("no label: %v", err)
+	}
+	// unreachable daemon: one JSON line on stderr, exit 1
+	dead := filepath.Join(shortDir(t), "none")
+	for _, args := range [][]string{{"verdict", "o/r", c1}, {"wait", "o/r", c1}, {"merge", "o/r", "7", c1}} {
+		_, errs, err = agent(t, dead, args...)
+		if code(err) != ExitError {
+			t.Errorf("%v: %v", args, err)
+		}
+		one(errs)
 	}
 }
 
