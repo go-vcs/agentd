@@ -91,6 +91,26 @@ type TreeReply struct {
 	Cached  bool            `json:"cached"`
 }
 
+// MaterializeReq asks for a sparse checkout of Commit (restricted to Paths;
+// empty: everything) into the new directory Dir, relative to the daemon's
+// materialize root.
+type MaterializeReq struct {
+	Session string   `json:"session"`
+	Repo    string   `json:"repo"`
+	Commit  string   `json:"commit"`
+	Paths   []string `json:"paths,omitempty"`
+	Dir     string   `json:"dir"`
+}
+
+// MaterializeReply names the commit and tree written and the absolute path.
+type MaterializeReply struct {
+	Commit string `json:"commit"`
+	Tree   string `json:"tree"`
+	Dir    string `json:"dir"`
+	Files  int    `json:"files"`
+	Bytes  int64  `json:"bytes"`
+}
+
 // ErrorBody is the body of every refusal.
 type ErrorBody struct {
 	Error *aerr.Error `json:"error"`

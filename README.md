@@ -27,6 +27,7 @@ agent sessions on one machine and GitHub, so that:
     forge-agent --label build-7 merge   go-vcs/forge 6 <40-hex-commit>
     forge-agent --label build-7 blob    go-vcs/forge <40-hex-blob-id> > file
     forge-agent --label build-7 tree    go-vcs/forge <40-hex-tree-id>
+    forge-agent --label build-7 materialize go-vcs/forge <40-hex-commit> work/1 --path cmd
 
 Exit codes of `forge-agent`: 0 green / done, 1 error, 3 red or refused by the
 gate, 4 pending or wait timed out. Errors are JSON on stderr:
@@ -79,11 +80,43 @@ with a long-lived `git cat-file --batch`. A cache hit allocates exactly 0 times
 (asserted). Timings are not recorded yet: the benchmark only runs when the
 1-minute and 5-minute loads are both at most 8.
 
+## Materialize
+
+    forge-agent --label build-7 materialize go-vcs/forge <40-hex-commit> work/1 --path cmd --path go.mod
+
+Writes a sparse checkout of a commit into the new directory `work/1`, relative
+to the daemon's `--materialize-root` (default: `forge-agentd/checkouts` under
+the user config dir, created 0700; a root under the temporary directory is
+refused, and an empty `--materialize-root` disables the call:
+`NOT_PERMITTED`). The result is a plain directory, not a git worktree. Without
+`--path` the whole tree is written; a path may name a file or a directory.
+Every commit, tree and blob is verified against its id by the object cache
+before it is written (GitHub's commit JSON is rebuilt into git's raw commit;
+a commit it cannot rebuild exactly, for example one with extra headers, is
+refused as `OBJECT_MISMATCH` rather than trusted).
+
+What is refused, with a test each: a destination that exists (`CONFLICT`, the
+existing directory is never touched); a destination or path with `..`, an
+absolute or empty element, a backslash, or a name of `.git` or `git~1` in any
+case; a tree that lists a name twice or holds a `.git` entry; a symbolic link
+whose target is absolute, leaves the checkout or reaches `.git`; more than
+20000 files, 256 MiB, 20000 trees, depth 32 or 256 paths (`BOUND_EXCEEDED`).
+All writes go through an `os.Root` scoped to the new directory, so a link
+planted in the root cannot carry a write outside it. A failure removes what
+was written. A submodule becomes an empty directory, as in git. At most 4
+materializations run at once (`RATE_LIMITED`), each for at most 5 minutes.
+
+Known limit: objects are fetched one at a time (one REST call per tree and per
+blob); there is no bulk path yet, so a large checkout is slower than
+`git clone` and costs one API request per object. Timings are not recorded:
+the benchmark against `git clone` and sparse checkout only runs when the
+1-minute and 5-minute loads are both at most 8.
+
 ## A0 status
 
 Done: verdicts, wait with one shared poller per commit, gated merge, idempotent
 writes, session identities, peer-checked socket, structured errors, fuzzed
-parsers, verified object cache. Not done: `Materialize`, push event stream
+parsers, verified object cache, `Materialize`. Not done: push event stream
 (the hub polls), keychain credential option. Leases, changes and change sets
 answer `UNSUPPORTED_BY_BACKEND` (milestone A3 and the forge backend, A4).
 

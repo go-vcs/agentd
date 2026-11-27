@@ -29,10 +29,14 @@ type objBE struct {
 	gate    chan struct{}
 }
 
-func (o *objBE) Object(_ context.Context, _, kind, id string) ([]byte, error) {
+func (o *objBE) Object(ctx context.Context, _, kind, id string) ([]byte, error) {
 	o.fetches.Add(1)
 	if o.gate != nil {
-		<-o.gate
+		select {
+		case <-o.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	o.mu2.Lock()
 	defer o.mu2.Unlock()

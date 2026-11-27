@@ -115,6 +115,14 @@ func (c *Client) ReadTree(ctx context.Context, repo, id string) (wire.TreeReply,
 	return r, err
 }
 
+// Materialize writes a sparse checkout of commit into the new directory dir
+// under the daemon's materialize root; paths empty means the whole tree.
+func (c *Client) Materialize(ctx context.Context, repo, commit, dir string, paths []string) (wire.MaterializeReply, error) {
+	var r wire.MaterializeReply
+	err := c.call(ctx, "/v1/materialize", wire.MaterializeReq{Session: c.session, Repo: repo, Commit: commit, Dir: dir, Paths: paths}, &r)
+	return r, err
+}
+
 // Merge merges a pull request iff commit is its head and is green.
 func (c *Client) Merge(ctx context.Context, requestID, repo string, pr int, commit, method string) (wire.MergeReply, error) {
 	var r wire.MergeReply
