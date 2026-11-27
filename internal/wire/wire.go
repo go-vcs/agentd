@@ -49,6 +49,26 @@ type VerdictReply struct {
 	TimedOut bool `json:"timed_out,omitempty"`
 }
 
+// EventsReq asks for the next observation of a commit's verdict after Since
+// (empty: any), waiting at most TimeoutSec.
+type EventsReq struct {
+	Session    string `json:"session"`
+	Repo       string `json:"repo"`
+	Commit     string `json:"commit"`
+	Since      string `json:"since,omitempty"`
+	TimeoutSec int    `json:"timeout_sec"`
+}
+
+// EventsReply is one observation. Cursor goes back as Since; Final means the
+// verdict is not PENDING and the stream is over; TimedOut means nothing changed
+// in time and Verdict is the latest observation (Cursor is then Since).
+type EventsReply struct {
+	verdict.Verdict
+	Cursor   string `json:"cursor"`
+	Final    bool   `json:"final,omitempty"`
+	TimedOut bool   `json:"timed_out,omitempty"`
+}
+
 // MergeReq merges one pull request, only if Commit is its head and is green.
 type MergeReq struct {
 	Session   string `json:"session"`
@@ -148,6 +168,10 @@ var (
 
 // ValidRequestID: 16 random bytes in lowercase hex, client-chosen.
 func ValidRequestID(s string) bool { return requestIDRE.MatchString(s) }
+
+// ValidCursor reports whether s has the shape of an events cursor (32 lowercase
+// hex digits, the same shape as a request id).
+func ValidCursor(s string) bool { return requestIDRE.MatchString(s) }
 
 // ValidSession reports whether s has the shape of a session id.
 func ValidSession(s string) bool { return sessionRE.MatchString(s) }

@@ -24,6 +24,7 @@ agent sessions on one machine and GitHub, so that:
     forge-agentd --token-file ~/.github-token          # socket under the user config dir
     forge-agent --label build-7 verdict go-vcs/forge <40-hex-commit>
     forge-agent --label build-7 wait    go-vcs/forge <40-hex-commit> --timeout 20m
+    forge-agent --label build-7 events  go-vcs/forge <40-hex-commit> --timeout 30m
     forge-agent --label build-7 merge   go-vcs/forge 6 <40-hex-commit>
     forge-agent --label build-7 blob    go-vcs/forge <40-hex-blob-id> > file
     forge-agent --label build-7 tree    go-vcs/forge <40-hex-tree-id>
@@ -112,12 +113,42 @@ blob); there is no bulk path yet, so a large checkout is slower than
 the benchmark against `git clone` and sparse checkout only runs when the
 1-minute and 5-minute loads are both at most 8.
 
+## Events
+
+    forge-agent --label build-7 events go-vcs/forge <40-hex-commit> --timeout 30m
+
+prints one JSON line per change of the commit's verdict, then ends on the final
+one with the exit code `wait` would give. Behind it, `POST /v1/events` takes a
+`since` cursor (empty for the first call) and returns the next observation that
+differs from it, with a new `cursor`; `final` marks a verdict that is not
+`PENDING`, `timed_out` a quiet call (the cursor is then unchanged).
+
+The stream rides the hub's poll loop, the one `wait` uses: any number of
+streams and waiters on one commit cost one stream of upstream reads. GitHub
+offers no event feed, so the semantics are level-triggered, not a queue:
+observations between two polls coalesce, a slow caller sees the latest state and
+never a backlog, and the final verdict is never skipped, whatever cursor the
+caller holds. A cursor is the first 16 bytes of the SHA-256 of the observed
+verdict, so it needs no state in the daemon and survives a daemon restart.
+Streams count against the same 16-per-session bound as waits.
+
+Counted, not timed (benchmark row 6, `TestThirteenWaitersAndThirteenStreamsCostOnePoller`,
+400 ms window, 20 ms interval):
+
+| Clients on one commit | Upstream reads through the daemon | Upstream reads, independent pollers |
+|---|---|---|
+| 13 waiters + 13 event streams | 21 | 520 |
+
+At the default 15 s interval that is 240 reads an hour through the daemon,
+against 240 per poller (6240 an hour for these 26) without it.
+
 ## A0 status
 
-Done: verdicts, wait with one shared poller per commit, gated merge, idempotent
-writes, session identities, peer-checked socket, structured errors, fuzzed
-parsers, verified object cache, `Materialize`. Not done: push event stream
-(the hub polls), keychain credential option. Leases, changes and change sets
+Done: verdicts, wait with one shared poller per commit, event stream over the
+same poller, gated merge, idempotent writes, session identities, peer-checked
+socket, structured errors, fuzzed parsers, verified object cache,
+`Materialize`. Not done: a true push feed from GitHub (none exists; the hub
+polls), keychain credential option. Leases, changes and change sets
 answer `UNSUPPORTED_BY_BACKEND` (milestone A3 and the forge backend, A4).
 
 The verdict logic in `internal/verdict` mirrors prwait's; extracting prwait's

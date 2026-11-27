@@ -109,6 +109,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/hello", s.hello)
 	mux.HandleFunc("POST /v1/verdict", s.verdict)
 	mux.HandleFunc("POST /v1/wait-verdict", s.wait)
+	mux.HandleFunc("POST /v1/events", s.events)
 	mux.HandleFunc("POST /v1/merge", s.merge)
 	mux.HandleFunc("POST /v1/read-blob", s.readBlob)
 	mux.HandleFunc("POST /v1/read-tree", s.readTree)
@@ -248,24 +249,17 @@ func (s *Server) wait(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	d := time.Duration(req.TimeoutSec) * time.Second
-	if req.TimeoutSec <= 0 || d > s.lim.MaxWait {
-		s.fail(w, aerr.New(aerr.BoundExceeded, "timeout_sec must be between 1 and the daemon's maximum wait"))
+	d, err := s.waitBound(req.TimeoutSec)
+	if err != nil {
+		s.fail(w, err)
 		return
 	}
-	s.mu.Lock()
-	if s.waits[req.Session] >= s.lim.MaxWaitsSession {
-		s.mu.Unlock()
-		s.fail(w, aerr.New(aerr.BoundExceeded, "too many concurrent waits in this session"))
+	leave, err := s.enter(req.Session)
+	if err != nil {
+		s.fail(w, err)
 		return
 	}
-	s.waits[req.Session]++
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.waits[req.Session]--
-		s.mu.Unlock()
-	}()
+	defer leave()
 	ctx, cancel := context.WithTimeout(r.Context(), d)
 	defer cancel()
 	v, timedOut, err := s.hub.Wait(ctx, req.Repo, req.Commit)

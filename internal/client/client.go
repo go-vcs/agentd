@@ -100,6 +100,14 @@ func (c *Client) Wait(ctx context.Context, repo, commit string, timeout time.Dur
 	return r, err
 }
 
+// Events blocks (at the daemon) until the verdict differs from the observation
+// named by since, is final, or timeout passes.
+func (c *Client) Events(ctx context.Context, repo, commit, since string, timeout time.Duration) (wire.EventsReply, error) {
+	var r wire.EventsReply
+	err := c.call(ctx, "/v1/events", wire.EventsReq{Session: c.session, Repo: repo, Commit: commit, Since: since, TimeoutSec: int(timeout / time.Second)}, &r)
+	return r, err
+}
+
 // ReadBlob returns a blob the daemon has verified against its id (base64 in
 // the reply; decoding it is the caller's step).
 func (c *Client) ReadBlob(ctx context.Context, repo, id string) (wire.BlobReply, error) {

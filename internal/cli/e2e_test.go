@@ -149,6 +149,10 @@ func TestEndToEnd(t *testing.T) {
 	if code(err) != ExitGreen || !strings.Contains(out, "GREEN") {
 		t.Errorf("wait: %v %s", err, out)
 	}
+	out, _, err = agent(t, sock, "events", "o/r", c1, "--timeout", "5s")
+	if code(err) != ExitGreen || !strings.Contains(out, "GREEN") || !strings.Contains(out, `"final":true`) || strings.Count(out, "\n") != 1 {
+		t.Errorf("events: %v %s", err, out)
+	}
 	// an abbreviation is refused, structured, with a failing code
 	_, errs, err := agent(t, sock, "verdict", "o/r", c1[:7])
 	if code(err) != ExitError || !strings.Contains(errs, `"reason":"ABBREVIATED_ID"`) {
@@ -281,7 +285,7 @@ func TestAgentRefusals(t *testing.T) {
 	}
 	// unreachable daemon: one JSON line on stderr, exit 1
 	dead := filepath.Join(shortDir(t), "none")
-	for _, args := range [][]string{{"verdict", "o/r", c1}, {"wait", "o/r", c1}, {"merge", "o/r", "7", c1}} {
+	for _, args := range [][]string{{"verdict", "o/r", c1}, {"wait", "o/r", c1}, {"events", "o/r", c1}, {"merge", "o/r", "7", c1}} {
 		_, errs, err = agent(t, dead, args...)
 		if code(err) != ExitError {
 			t.Errorf("%v: %v", args, err)

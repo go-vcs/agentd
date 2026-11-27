@@ -64,6 +64,36 @@ func fakeDaemon(t *testing.T, mode string) string {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		json.NewEncoder(w).Encode(wire.MaterializeReply{Commit: req.Commit, Dir: "/root/" + req.Dir, Files: len(req.Paths)})
 	})
+	// /v1/events answers a script: PENDING, a quiet timeout, then RED. Each step
+	// is only given to a caller that sends the cursor of the step before.
+	var calls int
+	mux.HandleFunc("/v1/events", func(w http.ResponseWriter, r *http.Request) {
+		if mode == "refuse" {
+			refuse(w)
+			return
+		}
+		var req wire.EventsReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		a, b := strings.Repeat("a", 32), strings.Repeat("b", 32)
+		calls++
+		var rep wire.EventsReply
+		switch {
+		case calls == 1 && req.Since == "":
+			rep = wire.EventsReply{Cursor: a}
+			rep.Commit, rep.State = req.Commit, "PENDING"
+		case calls == 2 && req.Since == a:
+			rep = wire.EventsReply{Cursor: a, TimedOut: true}
+			rep.Commit, rep.State = req.Commit, "PENDING"
+		case calls == 3 && req.Since == a:
+			rep = wire.EventsReply{Cursor: b, Final: true}
+			rep.Commit, rep.State = req.Commit, "RED"
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(wire.ErrorBody{Error: aerr.New(aerr.Malformed, "unexpected call")})
+			return
+		}
+		json.NewEncoder(w).Encode(rep)
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })

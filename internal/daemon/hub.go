@@ -39,6 +39,14 @@ type watch struct {
 	v      verdict.Verdict
 	err    error
 	last   verdict.Verdict // latest PENDING observation, for a timed-out wait
+
+	// The event stream (events.go): the latest observation of any state, a
+	// broadcast channel closed and replaced on every one, and whether the
+	// observation is the final verdict.
+	cur     verdict.Verdict
+	seen    bool
+	final   bool
+	changed chan struct{}
 }
 
 // NewHub returns a hub polling every interval, with at most maxWatch distinct
@@ -54,33 +62,11 @@ func (h *Hub) Polls() int64 { return h.polls.Load() }
 // upstream refuses for good. When ctx ends first it returns the last pending
 // observation and timedOut.
 func (h *Hub) Wait(ctx context.Context, repo, commit string) (v verdict.Verdict, timedOut bool, err error) {
-	key := repo + "@" + commit
-	h.mu.Lock()
-	w := h.watches[key]
-	if w == nil {
-		if len(h.watches) >= h.maxWatch {
-			h.mu.Unlock()
-			return verdict.Verdict{}, false, aerr.New(aerr.BoundExceeded, "too many commits watched at once")
-		}
-		wctx, cancel := context.WithCancel(context.Background())
-		w = &watch{cancel: cancel, done: make(chan struct{})}
-		h.watches[key] = w
-		go h.run(wctx, key, repo, commit, w)
+	w, release, err := h.acquire(repo, commit)
+	if err != nil {
+		return verdict.Verdict{}, false, err
 	}
-	w.n++
-	h.mu.Unlock()
-
-	defer func() {
-		h.mu.Lock()
-		w.n--
-		if w.n == 0 {
-			w.cancel()
-			if h.watches[key] == w {
-				delete(h.watches, key)
-			}
-		}
-		h.mu.Unlock()
-	}()
+	defer release()
 
 	select {
 	case <-w.done:
@@ -96,10 +82,52 @@ func (h *Hub) Wait(ctx context.Context, repo, commit string) (v verdict.Verdict,
 	}
 }
 
+// acquire joins the poll loop of (repo, commit), starting it when this is the
+// first interested caller. release must be called exactly once; the loop stops
+// when the last caller has released.
+func (h *Hub) acquire(repo, commit string) (*watch, func(), error) {
+	key := repo + "@" + commit
+	h.mu.Lock()
+	w := h.watches[key]
+	if w == nil {
+		if len(h.watches) >= h.maxWatch {
+			h.mu.Unlock()
+			return nil, nil, aerr.New(aerr.BoundExceeded, "too many commits watched at once")
+		}
+		wctx, cancel := context.WithCancel(context.Background())
+		w = &watch{cancel: cancel, done: make(chan struct{}), changed: make(chan struct{})}
+		h.watches[key] = w
+		go h.run(wctx, key, repo, commit, w)
+	}
+	w.n++
+	h.mu.Unlock()
+	return w, func() {
+		h.mu.Lock()
+		w.n--
+		if w.n == 0 {
+			w.cancel()
+			if h.watches[key] == w {
+				delete(h.watches, key)
+			}
+		}
+		h.mu.Unlock()
+	}, nil
+}
+
+// observe records an observation and wakes the event streams. h.mu is held.
+func (w *watch) observe(v verdict.Verdict, final bool) {
+	w.cur, w.seen, w.final = v, true, final
+	close(w.changed)
+	w.changed = make(chan struct{})
+}
+
 func (h *Hub) run(ctx context.Context, key, repo, commit string, w *watch) {
 	finish := func(v verdict.Verdict, err error) {
 		h.mu.Lock()
 		w.v, w.err = v, err
+		if err == nil {
+			w.observe(v, true)
+		}
 		if h.watches[key] == w {
 			delete(h.watches, key)
 		}
@@ -118,6 +146,7 @@ func (h *Hub) run(ctx context.Context, key, repo, commit string, w *watch) {
 		case err == nil:
 			h.mu.Lock()
 			w.last = v
+			w.observe(v, false)
 			h.mu.Unlock()
 		case e.Retryable:
 			// A 5xx or a rate limit is not an answer: keep waiting.
