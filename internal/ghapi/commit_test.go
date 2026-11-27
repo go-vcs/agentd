@@ -136,7 +136,26 @@ func TestDecodeCommitRefusals(t *testing.T) {
 			r.Parents = make([]struct {
 				SHA string `json:"sha"`
 			}, maxParents+1)
+			for i := range r.Parents {
+				r.Parents[i].SHA = emptyTree // each one valid: only the count is wrong
+			}
 		},
+	}
+	ok := good
+	ok.Parents = make([]struct {
+		SHA string `json:"sha"`
+	}, maxParents)
+	for i := range ok.Parents {
+		ok.Parents[i].SHA = emptyTree
+	}
+	okJSON, _ := json.Marshal(ok)
+	if _, err := DecodeCommit(okJSON); err != nil {
+		t.Errorf("a commit with exactly maxParents parents was refused: %v", err)
+	}
+	// A type error in one field must refuse the commit, not rebuild the rest.
+	typed := `{"tree":{"sha":"` + emptyTree + `"},"author":{"name":"A","email":"a@x","date":"2023-11-14T22:13:20Z"},"committer":{"name":"A","email":"a@x","date":"2023-11-14T22:13:20Z"},"message":5}`
+	if _, err := DecodeCommit([]byte(typed)); err == nil {
+		t.Error("a mistyped field was accepted")
 	}
 	for name, m := range mutate {
 		r := good

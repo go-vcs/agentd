@@ -84,7 +84,7 @@ func startDaemon(t *testing.T) string {
 	c := DaemonCmd()
 	c.SetOut(out)
 	c.SetErr(errb)
-	c.SetArgs([]string{"--socket", sock, "--token-file", tokenFile(t), "--api-url", fakeGitHub(t), "--poll-interval", "5ms"})
+	c.SetArgs([]string{"--socket", sock, "--token-file", tokenFile(t), "--api-url", fakeGitHub(t), "--poll-interval", "5ms", "--materialize-root", ""})
 	done := make(chan error, 1)
 	go func() { done <- c.ExecuteContext(ctx) }()
 	t.Cleanup(func() {
@@ -212,6 +212,9 @@ func TestDaemonRefusals(t *testing.T) {
 	} else {
 		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "socket directory")
 	}
+	// The materialize root is refused before anything listens.
+	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", t.TempDir()), "temporary directory")
+	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", "relative/dir"), "absolute")
 	if err := run("--token-file", tokenFile(t), "extra"); err == nil {
 		t.Error("a positional argument was accepted")
 	}
@@ -222,6 +225,18 @@ func TestDefaultTokenFileWithoutHome(t *testing.T) {
 	t.Setenv("USERPROFILE", "") // windows
 	if got := defaultTokenFile(); got != "" {
 		t.Errorf("defaultTokenFile without a home = %q", got)
+	}
+}
+
+func TestDefaultMaterializeRootWithoutAConfigDir(t *testing.T) {
+	if got := DefaultMaterializeRoot(); got == "" || !filepath.IsAbs(got) {
+		t.Errorf("default root %q", got)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("APPDATA", "") // windows
+	if got := DefaultMaterializeRoot(); got != "" {
+		t.Errorf("default root without a config dir = %q", got)
 	}
 }
 

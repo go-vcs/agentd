@@ -123,6 +123,29 @@ func TestMaterializeDisabledAndUnknownSession(t *testing.T) {
 	}
 }
 
+func TestMaterializeBadBodyAndUnopenableRoot(t *testing.T) {
+	be := &objBE{fakeBE: fakeBE{state: verdict.Green}}
+	commit, _ := repoOf(t, be)
+	missing := filepath.Join(t.TempDir(), "no", "such", "root")
+	ts, _ := start(t, be, func(l *Limits) { l.MaterializeRoot = missing })
+	sess := hello(t, ts, "a")
+	if code, b := post(t, ts, "/v1/materialize", `nope`); code != 400 || reason(b) != aerr.Malformed {
+		t.Fatalf("bad body: %d %s", code, b)
+	}
+	code, b := post(t, ts, "/v1/materialize", wire.MaterializeReq{Session: sess, Repo: "o/r", Commit: commit, Dir: "d"})
+	if code != 500 || reason(b) != aerr.Internal || strings.Contains(string(b), missing) {
+		t.Fatalf("unopenable root: %d %s", code, b)
+	}
+}
+
+// A cap of zero refuses at once: the guard is asserted without a blocked request.
+func TestMaterializeCapOfZeroRefuses(t *testing.T) {
+	_, commit, _, _, do := mat(t, t.TempDir(), func(l *Limits) { l.MaterializeMax = 0 })
+	if code, body := do(wire.MaterializeReq{Commit: commit, Dir: "z"}); code != 429 || reason(body) != aerr.RateLimited {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
 // Concurrent materializations are capped, and the refusal is retryable.
 func TestMaterializeConcurrencyCap(t *testing.T) {
 	root := t.TempDir()

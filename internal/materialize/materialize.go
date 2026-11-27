@@ -13,6 +13,7 @@ package materialize
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -72,8 +73,8 @@ func SafeName(n string) bool {
 // Elems splits a slash-separated relative path into elements, refusing an
 // absolute path, a trailing slash, and any element SafeName refuses.
 func Elems(p string, maxElems int) ([]string, error) {
-	if p == "" || len(p) > MaxPathLen {
-		return nil, aerr.New(aerr.Malformed, "path is empty or too long")
+	if len(p) > MaxPathLen { // an empty path splits into one empty element, refused below
+		return nil, aerr.New(aerr.Malformed, "path is too long")
 	}
 	es := strings.Split(p, "/")
 	if len(es) > maxElems {
@@ -107,19 +108,45 @@ func (n *node) add(es []string) {
 	n.all = true
 }
 
+// fsRoot is the part of *os.Root the checkout uses, so that a test can make
+// any one operation fail and see that the output is removed and the error kept.
+type fsRoot interface {
+	MkdirAll(name string, perm os.FileMode) error
+	Mkdir(name string, perm os.FileMode) error
+	OpenFile(name string, flag int, perm os.FileMode) (io.WriteCloser, error)
+	Symlink(oldname, newname string) error
+	RemoveAll(name string) error
+	OpenRoot(name string) (fsRoot, error)
+	Close() error
+}
+
+type osRoot struct{ *os.Root }
+
+func (r osRoot) OpenFile(name string, flag int, perm os.FileMode) (io.WriteCloser, error) {
+	return r.Root.OpenFile(name, flag, perm)
+}
+
+func (r osRoot) OpenRoot(name string) (fsRoot, error) {
+	s, err := r.Root.OpenRoot(name)
+	return osRoot{s}, err
+}
+
 type writer struct {
 	ctx   context.Context
-	r     *os.Root
+	r     fsRoot
 	f     Fetcher
 	lim   Limits
 	res   Result
 	trees int
-	done  map[string]bool
 }
 
 // Write materializes the tree treeID, restricted to paths (empty: the whole
 // tree), as the new directory dir under root. dir must not exist.
 func Write(ctx context.Context, root *os.Root, dir, treeID string, paths []string, f Fetcher, lim Limits) (Result, error) {
+	return write(ctx, osRoot{root}, dir, treeID, paths, f, lim)
+}
+
+func write(ctx context.Context, root fsRoot, dir, treeID string, paths []string, f Fetcher, lim Limits) (Result, error) {
 	des, err := Elems(dir, MaxDirDepth)
 	if err != nil {
 		return Result{}, err
@@ -144,10 +171,7 @@ func Write(ctx context.Context, root *os.Root, dir, treeID string, paths []strin
 		}
 	}
 	if err := root.Mkdir(dir, 0o755); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return Result{}, aerr.New(aerr.Conflict, "the destination already exists")
-		}
-		return Result{}, fsError(err)
+		return Result{}, fsError(err) // an existing destination is CONFLICT
 	}
 	sub, err := root.OpenRoot(dir)
 	if err != nil {
@@ -155,7 +179,7 @@ func Write(ctx context.Context, root *os.Root, dir, treeID string, paths []strin
 		return Result{}, fsError(err)
 	}
 	defer sub.Close()
-	w := &writer{ctx: ctx, r: sub, f: f, lim: lim, done: map[string]bool{}}
+	w := &writer{ctx: ctx, r: sub, f: f, lim: lim}
 	if err := w.tree(treeID, nil, sel); err != nil {
 		_ = root.RemoveAll(dir)
 		return Result{}, err
@@ -163,6 +187,7 @@ func Write(ctx context.Context, root *os.Root, dir, treeID string, paths []strin
 	return w.res, nil
 }
 
+// fsError maps a filesystem error; nil stays nil.
 func fsError(err error) error {
 	if errors.Is(err, fs.ErrExist) {
 		return aerr.New(aerr.Conflict, "a path of the checkout already exists (a name differing only in case?)")
@@ -242,15 +267,7 @@ func find(es []gittree.Entry, name string) (gittree.Entry, bool) {
 }
 
 func (w *writer) mkdir(rel []string) error {
-	p := strings.Join(rel, "/")
-	if w.done[p] {
-		return nil
-	}
-	if err := w.r.MkdirAll(p, 0o755); err != nil {
-		return fsError(err)
-	}
-	w.done[p] = true
-	return nil
+	return fsError(w.r.MkdirAll(strings.Join(rel, "/"), 0o755))
 }
 
 func (w *writer) entry(dir []string, e gittree.Entry) error {

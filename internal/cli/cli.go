@@ -134,14 +134,14 @@ func DefaultMaterializeRoot() string {
 // A directory under the system's temporary directory is refused: checkouts are
 // durable, and a temporary location can be cleaned away under a running agent.
 func PrepareRoot(dir string) (string, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("materialize root %q must be an absolute path", dir)
 	}
-	if err := os.MkdirAll(abs, 0o700); err != nil {
-		return "", err
+	real := dir
+	err := os.MkdirAll(dir, 0o700)
+	if err == nil {
+		real, err = filepath.EvalSymlinks(dir)
 	}
-	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return "", err
 	}

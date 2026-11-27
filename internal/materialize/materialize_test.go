@@ -3,6 +3,7 @@ package materialize
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -333,4 +334,165 @@ func FuzzElems(f *testing.F) {
 			}
 		}
 	})
+}
+
+// failing makes the nth filesystem or fetch operation fail.
+type failing struct {
+	inner fsRoot
+	n     *int // operations left before the failing one
+	hit   *bool
+}
+
+var errInjected = errors.New("injected")
+
+func (f failing) tick() error {
+	if *f.n == 0 {
+		*f.hit = true
+		*f.n = -1
+		return errInjected
+	}
+	if *f.n > 0 {
+		*f.n--
+	}
+	return nil
+}
+
+func (f failing) MkdirAll(name string, perm os.FileMode) error {
+	if err := f.tick(); err != nil {
+		return err
+	}
+	return f.inner.MkdirAll(name, perm)
+}
+
+func (f failing) Mkdir(name string, perm os.FileMode) error {
+	if err := f.tick(); err != nil {
+		return err
+	}
+	return f.inner.Mkdir(name, perm)
+}
+
+func (f failing) Symlink(o, n string) error {
+	if err := f.tick(); err != nil {
+		return err
+	}
+	return f.inner.Symlink(o, n)
+}
+
+func (f failing) RemoveAll(name string) error { return f.inner.RemoveAll(name) }
+func (f failing) Close() error                { return f.inner.Close() }
+
+func (f failing) OpenRoot(name string) (fsRoot, error) {
+	if err := f.tick(); err != nil {
+		// A usable root with the error: code that ignored the error would carry on.
+		r, _ := f.inner.OpenRoot(name)
+		return failing{r, f.n, f.hit}, err
+	}
+	r, err := f.inner.OpenRoot(name)
+	return failing{r, f.n, f.hit}, err
+}
+
+type failingFile struct {
+	failing
+	w io.WriteCloser
+}
+
+func (f failingFile) Write(p []byte) (int, error) {
+	if err := f.tick(); err != nil {
+		return 0, err
+	}
+	return f.w.Write(p)
+}
+
+func (f failingFile) Close() error {
+	err := f.w.Close()
+	if e := f.tick(); e != nil {
+		return e
+	}
+	return err
+}
+
+func (f failing) OpenFile(name string, flag int, perm os.FileMode) (io.WriteCloser, error) {
+	if err := f.tick(); err != nil {
+		w, _ := f.inner.OpenFile(name, flag, perm) // usable, so that ignoring the error would carry on
+		return w, err
+	}
+	w, err := f.inner.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	return failingFile{f, w}, nil
+}
+
+type failingFetch struct {
+	*fake
+	f failing
+}
+
+func (c failingFetch) Tree(ctx context.Context, id string) ([]gittree.Entry, error) {
+	if err := c.f.tick(); err != nil {
+		return nil, err
+	}
+	return c.fake.Tree(ctx, id)
+}
+
+func (c failingFetch) Blob(ctx context.Context, id string) ([]byte, error) {
+	if err := c.f.tick(); err != nil {
+		return nil, err
+	}
+	return c.fake.Blob(ctx, id)
+}
+
+// Whichever single operation fails, the error is the one returned and nothing
+// of the checkout is left; with no failure the same run succeeds.
+func TestAnyOneOperationFailingLeavesNothingAndIsReported(t *testing.T) {
+	selections := [][]string{nil, {"README.md", "src/pkg", "src/main.go", "lnk", "sub"}}
+	for _, paths := range selections {
+		ops := 0
+		for n := 0; ; n++ {
+			r, dir := open(t)
+			left, hit := n, false
+			fl := failing{osRoot{r}, &left, &hit}
+			_, err := write(context.Background(), fl, "a/out", "T0", paths, failingFetch{sample(), fl}, DefaultLimits())
+			if !hit {
+				if err != nil {
+					t.Fatalf("paths %v, no injected failure yet: %v", paths, err)
+				}
+				ops = n
+				break
+			}
+			if !errors.Is(err, errInjected) {
+				t.Fatalf("paths %v, failure %d: %v", paths, n, err)
+			}
+			if exists(filepath.Join(dir, "a", "out")) {
+				t.Fatalf("paths %v, failure %d left the checkout behind", paths, n)
+			}
+		}
+		if ops < 10 {
+			t.Fatalf("only %d operations counted for %v", ops, paths)
+		}
+	}
+}
+
+func TestPathLongerThanTheBoundIsRefused(t *testing.T) {
+	// A chain of 20 directories with 250-byte names is deeper in bytes than
+	// MaxPathLen although each name and the depth are within their bounds.
+	f := &fake{trees: map[string][]gittree.Entry{}, blobs: map[string][]byte{"b": nil}}
+	id := "T0"
+	for i := 0; i < 20; i++ {
+		next := "T" + strings.Repeat("n", i+1)
+		f.trees[id] = []gittree.Entry{{Mode: "40000", Name: strings.Repeat(string(rune('a'+i)), 250), ID: next}}
+		id = next
+	}
+	f.trees[id] = []gittree.Entry{{Mode: "100644", Name: "f", ID: "b"}}
+	r, dir := open(t)
+	if _, err := Write(context.Background(), r, "out", "T0", nil, f, DefaultLimits()); reason(err) != aerr.BoundExceeded {
+		t.Fatalf("%v", err)
+	}
+	if exists(filepath.Join(dir, "out")) {
+		t.Fatal("left behind")
+	}
+	long := strings.Repeat("a/", MaxPathLen) + "a"
+	if _, err := Elems(long, 1<<20); reason(err) != aerr.Malformed {
+		t.Fatalf("long path: %v", err)
+	}
 }
