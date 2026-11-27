@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +64,8 @@ func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
 func DaemonCmd() *cobra.Command {
 	var socket, tokenFile, apiURL string
 	var poll time.Duration
+	var cacheMB int64
+	var cacheEntries int
 	cmd := &cobra.Command{
 		Use:           "forge-agentd",
 		Short:         "local agent-VCS daemon with a GitHub backend",
@@ -80,6 +83,7 @@ func DaemonCmd() *cobra.Command {
 			}
 			lim := daemon.DefaultLimits()
 			lim.PollInterval = poll
+			lim.Cache.MaxBytes, lim.Cache.MaxEntries = cacheMB<<20, cacheEntries
 			l, err := sock.Listen(socket)
 			if err != nil {
 				return err
@@ -105,6 +109,8 @@ func DaemonCmd() *cobra.Command {
 	f.StringVar(&tokenFile, "token-file", defaultTokenFile(), "file holding the GitHub token (mode 0600); never read from argv or the environment")
 	f.StringVar(&apiURL, "api-url", "https://api.github.com", "GitHub REST base URL (https, or http on loopback)")
 	f.DurationVar(&poll, "poll-interval", 15*time.Second, "time between upstream reads for a commit being waited on")
+	f.Int64Var(&cacheMB, "cache-mb", 256, "object cache size in MiB (in memory; least recently used evicted)")
+	f.IntVar(&cacheEntries, "cache-entries", 100000, "most objects the cache holds")
 	return cmd
 }
 
@@ -209,7 +215,45 @@ func AgentCmd() *cobra.Command {
 	}
 	mergeCmd.Flags().StringVar(&method, "method", "merge", "merge, squash or rebase")
 	mergeCmd.Flags().StringVar(&requestID, "request-id", "", "32 hex digits; reuse it to retry safely (default: random)")
-	root.AddCommand(verdictCmd, waitCmd, mergeCmd)
+	blobCmd := &cobra.Command{
+		Use:   "blob <owner/repo> <full-blob-id>",
+		Short: "write a blob's bytes to stdout, verified against its id by the daemon",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			r, err := c.ReadBlob(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return report(cmd, err)
+			}
+			b, err := base64.StdEncoding.DecodeString(r.Content)
+			if err != nil {
+				return report(cmd, aerr.New(aerr.Internal, ""))
+			}
+			_, err = cmd.OutOrStdout().Write(b)
+			return err
+		},
+	}
+	treeCmd := &cobra.Command{
+		Use:   "tree <owner/repo> <full-tree-id>",
+		Short: "print a tree's entries as JSON, verified against its id by the daemon",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			r, err := c.ReadTree(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return report(cmd, err)
+			}
+			emit(cmd, r)
+			return nil
+		},
+	}
+	root.AddCommand(verdictCmd, waitCmd, mergeCmd, blobCmd, treeCmd)
 	return root
 }
 

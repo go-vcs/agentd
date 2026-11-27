@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"content\":\"aGk=\",\"encoding\":\"base64\",\"size\":99}")

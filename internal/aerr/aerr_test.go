@@ -11,7 +11,7 @@ func TestStatusAndRetryable(t *testing.T) {
 	for r, want := range map[string]int{
 		Malformed: 400, AbbreviatedID: 400, RequestIDReused: 400, BoundExceeded: 413, RateLimited: 429, RefMoved: 409,
 		VerdictRed: 412, VerdictPending: 412, Conflict: 412, ChangeClosed: 412, NotPermitted: 403, NotFound: 404,
-		UnknownSession: 404, Unavailable: 503, UnsupportedBackend: 501, Internal: 500, "SOMETHING_NEW": 500,
+		UnknownSession: 404, Unavailable: 503, UnsupportedBackend: 501, ObjectMismatch: 502, Internal: 500, "SOMETHING_NEW": 500,
 	} {
 		if got := New(r, "").HTTPStatus(); got != want {
 			t.Errorf("%s: %d, want %d", r, got, want)

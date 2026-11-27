@@ -7,6 +7,7 @@ package ghapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-vcs/agentd/internal/aerr"
+	"github.com/go-vcs/agentd/internal/gittree"
 	"github.com/go-vcs/agentd/internal/oid"
 	"github.com/go-vcs/agentd/internal/verdict"
 )
@@ -402,4 +404,119 @@ func (c *Client) Head(ctx context.Context, repo string, number int) (string, err
 // Merge is MergePR under the name the daemon's Backend uses.
 func (c *Client) Merge(ctx context.Context, repo string, number int, sha, method string) (string, error) {
 	return c.MergePR(ctx, repo, number, sha, method)
+}
+
+// MaxObject is the largest blob the client decodes.
+const MaxObject = 2 << 20
+
+type blobReply struct {
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
+	Size     int64  `json:"size"`
+}
+
+// DecodeBlob reads a git/blobs answer into the blob's bytes. The size is
+// checked before anything is decoded, and the decoded length must equal it.
+func DecodeBlob(b []byte, max int64) ([]byte, error) {
+	var r blobReply
+	if err := json.Unmarshal(b, &r); err != nil {
+		return nil, err
+	}
+	if r.Size < 0 || r.Size > max {
+		return nil, errBlobTooLarge
+	}
+	switch r.Encoding {
+	case "base64":
+		s := strings.ReplaceAll(r.Content, "\n", "")
+		if int64(len(s)) > (max+2)/3*4 {
+			return nil, errBlobTooLarge
+		}
+		d, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(d)) != r.Size {
+			return nil, errors.New("blob size does not match its content")
+		}
+		return d, nil
+	case "utf-8":
+		if int64(len(r.Content)) != r.Size {
+			return nil, errors.New("blob size does not match its content")
+		}
+		return []byte(r.Content), nil
+	}
+	return nil, errors.New("unknown blob encoding")
+}
+
+var errBlobTooLarge = errors.New("blob larger than the bound")
+
+type treeReply struct {
+	Truncated bool `json:"truncated"`
+	Tree      []struct {
+		Path string `json:"path"`
+		Mode string `json:"mode"`
+		SHA  string `json:"sha"`
+	} `json:"tree"`
+}
+
+// DecodeTree reads a git/trees answer (not recursive) into tree entries. A
+// truncated listing is refused: the tree could not be rebuilt and verified.
+func DecodeTree(b []byte) ([]gittree.Entry, error) {
+	var r treeReply
+	if err := json.Unmarshal(b, &r); err != nil {
+		return nil, err
+	}
+	if r.Truncated || len(r.Tree) > gittree.MaxEntries {
+		return nil, errors.New("tree listing truncated or too large")
+	}
+	out := make([]gittree.Entry, 0, len(r.Tree))
+	for _, e := range r.Tree {
+		m, ok := gittree.CanonicalMode(e.Mode)
+		if !ok {
+			return nil, errors.New("unknown tree entry mode")
+		}
+		out = append(out, gittree.Entry{Mode: m, Name: e.Path, ID: e.SHA})
+	}
+	return out, nil
+}
+
+// Object returns the raw content (what git hashes after its header) of the
+// blob or tree id. It is NOT verified here: the daemon's cache recomputes the
+// id before it keeps or returns anything.
+func (c *Client) Object(ctx context.Context, repo, kind, id string) ([]byte, error) {
+	if !ValidRepo(repo) {
+		return nil, aerr.New(aerr.Malformed, "repo must be owner/name")
+	}
+	if _, err := oid.Parse(id); err != nil {
+		return nil, idError(err)
+	}
+	var raw json.RawMessage
+	switch kind {
+	case "blob":
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/git/blobs/"+id, nil, nil, &raw); err != nil {
+			return nil, err
+		}
+		d, err := DecodeBlob(raw, MaxObject)
+		if errors.Is(err, errBlobTooLarge) {
+			return nil, aerr.New(aerr.BoundExceeded, "blob larger than "+strconv.Itoa(MaxObject)+" bytes")
+		}
+		if err != nil {
+			return nil, aerr.New(aerr.Unavailable, "upstream answer unreadable")
+		}
+		return d, nil
+	case "tree":
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/git/trees/"+id, nil, nil, &raw); err != nil {
+			return nil, err
+		}
+		es, err := DecodeTree(raw)
+		if err != nil {
+			return nil, aerr.New(aerr.Unavailable, "upstream answer unreadable")
+		}
+		d, err := gittree.Build(es)
+		if err != nil {
+			return nil, aerr.New(aerr.Unavailable, "upstream answer unreadable")
+		}
+		return d, nil
+	}
+	return nil, aerr.New(aerr.Malformed, "kind must be blob or tree")
 }

@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("040000 d\x00aaaaaaaaaaaaaaaaaaaa")
+int(20)
