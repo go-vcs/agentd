@@ -227,6 +227,41 @@ func AgentCmd() *cobra.Command {
 	}
 	waitCmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "longest wait")
 
+	var evTimeout time.Duration
+	eventsCmd := &cobra.Command{
+		Use:   "events <owner/repo> <full-commit-id>",
+		Short: "print one JSON line per change of a commit's verdict until it is final; one poller per machine serves every stream",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), evTimeout)
+			defer cancel()
+			since := ""
+			for {
+				// One call waits at most ten minutes; the flag bounds the whole stream.
+				r, err := c.Events(ctx, args[0], args[1], since, 10*time.Minute)
+				if err != nil {
+					if ctx.Err() != nil {
+						return verdictExit(verdict.Pending, true)
+					}
+					return report(cmd, err)
+				}
+				since = r.Cursor
+				if r.TimedOut {
+					continue
+				}
+				emit(cmd, r)
+				if r.Final {
+					return verdictExit(r.State, false)
+				}
+			}
+		},
+	}
+	eventsCmd.Flags().DurationVar(&evTimeout, "timeout", 30*time.Minute, "longest the whole stream runs")
+
 	var method, requestID string
 	var pr int
 	mergeCmd := &cobra.Command{
@@ -316,7 +351,7 @@ func AgentCmd() *cobra.Command {
 		},
 	}
 	matCmd.Flags().StringArrayVar(&paths, "path", nil, "a file or directory to check out (repeatable; default: the whole tree)")
-	root.AddCommand(verdictCmd, waitCmd, mergeCmd, blobCmd, treeCmd, matCmd)
+	root.AddCommand(verdictCmd, waitCmd, eventsCmd, mergeCmd, blobCmd, treeCmd, matCmd)
 	return root
 }
 
