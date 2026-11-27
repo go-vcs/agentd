@@ -397,7 +397,10 @@ func (s *Server) doMerge(ctx context.Context, req wire.MergeReq) (wire.MergeRepl
 	// GitHub applies the sha precondition atomically with the merge: if the head
 	// moved since the read above it answers 409, reported as REF_MOVED.
 	mc, err := s.be.Merge(ctx, req.Repo, req.PR, req.Commit, req.Method)
-		return wire.MergeReply{Repo: req.Repo, PR: req.PR, Commit: req.Commit, MergeCommit: mc}, nil
+	if err != nil {
+		return wire.MergeReply{}, err
+	}
+	return wire.MergeReply{Repo: req.Repo, PR: req.PR, Commit: req.Commit, MergeCommit: mc}, nil
 }
 
 func itoa(n int) string {
