@@ -25,6 +25,8 @@ agent sessions on one machine and GitHub, so that:
     forge-agent --label build-7 verdict go-vcs/forge <40-hex-commit>
     forge-agent --label build-7 wait    go-vcs/forge <40-hex-commit> --timeout 20m
     forge-agent --label build-7 merge   go-vcs/forge 6 <40-hex-commit>
+    forge-agent --label build-7 blob    go-vcs/forge <40-hex-blob-id> > file
+    forge-agent --label build-7 tree    go-vcs/forge <40-hex-tree-id>
 
 Exit codes of `forge-agent`: 0 green / done, 1 error, 3 red or refused by the
 gate, 4 pending or wait timed out. Errors are JSON on stderr:
@@ -54,11 +56,34 @@ Body 64 KiB, 64 requests in flight, 64 sessions, 16 waits per session, 256
 watched commits, wait at most 1 h, 100000 idempotency rows for 24 h, upstream
 reply 8 MiB, 10 pages. Exceeding one gives `BOUND_EXCEEDED` or `RATE_LIMITED`.
 
+## Object cache
+
+`blob` and `tree` read git objects through a cache shared by every session.
+An object is admitted only after the daemon has recomputed its id from the
+bytes (git's `<kind> <len>\0<content>` hash, SHA-1 or SHA-256 by id length), so
+a corrupted or malicious GitHub answer cannot poison it: the answer is
+`OBJECT_MISMATCH` and nothing is kept. GitHub's tree JSON is rebuilt into git's
+raw tree (a truncated listing is refused), so a tree is verified the same way.
+Concurrent misses of one id share one upstream fetch.
+
+Bounds: 256 MiB (`--cache-mb`), 100000 entries (`--cache-entries`), 2 MiB per
+object; the least recently used is evicted; an object larger than the bound is
+`BOUND_EXCEEDED`. The cache is in memory (the design's 10 GiB default belongs to
+a disk-backed cache, not done) and is never offered to clones as alternates.
+The cache is keyed by id alone: a session that knows the id of an object in a
+repository the daemon can read, but another session asked about, can read it
+too. All sessions are the same uid and share the one credential.
+
+Benchmark row 4 (`BenchmarkVsGitCatFileBatch`, objcache) compares a cache hit
+with a long-lived `git cat-file --batch`. A cache hit allocates exactly 0 times
+(asserted). Timings are not recorded yet: the benchmark only runs when the
+1-minute and 5-minute loads are both at most 8.
+
 ## A0 status
 
 Done: verdicts, wait with one shared poller per commit, gated merge, idempotent
 writes, session identities, peer-checked socket, structured errors, fuzzed
-parsers. Not done: verified object cache, `Materialize`, push event stream
+parsers, verified object cache. Not done: `Materialize`, push event stream
 (the hub polls), keychain credential option. Leases, changes and change sets
 answer `UNSUPPORTED_BY_BACKEND` (milestone A3 and the forge backend, A4).
 

@@ -18,6 +18,8 @@ func TestEveryEndpointDecodesStrictlyAndChecksTheSession(t *testing.T) {
 		"/v1/verdict":      wire.VerdictReq{Session: ghost, Repo: "o/r", Commit: c1},
 		"/v1/wait-verdict": wire.WaitReq{Session: ghost, Repo: "o/r", Commit: c1, TimeoutSec: 1},
 		"/v1/merge":        mergeReq(ghost, rid, c1),
+		"/v1/read-blob":    wire.ObjectReq{Session: ghost, Repo: "o/r", ID: c1},
+		"/v1/read-tree":    wire.ObjectReq{Session: ghost, Repo: "o/r", ID: c1},
 	}
 	for path, body := range bodies {
 		if code, b := post(t, ts, path, `{"session":"`+sess+`","bogus":1}`); code != 400 || reason(b) != aerr.Malformed {

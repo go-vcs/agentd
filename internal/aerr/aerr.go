@@ -28,6 +28,7 @@ const (
 	Unavailable        = "UNAVAILABLE"
 	Internal           = "INTERNAL"
 	UnsupportedBackend = "UNSUPPORTED_BY_BACKEND"
+	ObjectMismatch     = "OBJECT_MISMATCH" // the upstream's bytes do not hash to the id asked for
 )
 
 // Error is both the Go error and the JSON body of a refusal.
@@ -90,6 +91,8 @@ func (e *Error) HTTPStatus() int {
 		return http.StatusServiceUnavailable
 	case UnsupportedBackend:
 		return http.StatusNotImplemented
+	case ObjectMismatch:
+		return http.StatusBadGateway
 	}
 	return http.StatusInternalServerError
 }

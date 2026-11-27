@@ -100,6 +100,21 @@ func (c *Client) Wait(ctx context.Context, repo, commit string, timeout time.Dur
 	return r, err
 }
 
+// ReadBlob returns a blob the daemon has verified against its id (base64 in
+// the reply; decoding it is the caller's step).
+func (c *Client) ReadBlob(ctx context.Context, repo, id string) (wire.BlobReply, error) {
+	var r wire.BlobReply
+	err := c.call(ctx, "/v1/read-blob", wire.ObjectReq{Session: c.session, Repo: repo, ID: id}, &r)
+	return r, err
+}
+
+// ReadTree returns the entries of a tree the daemon has verified against its id.
+func (c *Client) ReadTree(ctx context.Context, repo, id string) (wire.TreeReply, error) {
+	var r wire.TreeReply
+	err := c.call(ctx, "/v1/read-tree", wire.ObjectReq{Session: c.session, Repo: repo, ID: id}, &r)
+	return r, err
+}
+
 // Merge merges a pull request iff commit is its head and is green.
 func (c *Client) Merge(ctx context.Context, requestID, repo string, pr int, commit, method string) (wire.MergeReply, error) {
 	var r wire.MergeReply

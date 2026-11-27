@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-vcs/agentd/internal/aerr"
 	"github.com/go-vcs/agentd/internal/ghapi"
+	"github.com/go-vcs/agentd/internal/objcache"
 	"github.com/go-vcs/agentd/internal/oid"
 	"github.com/go-vcs/agentd/internal/verdict"
 	"github.com/go-vcs/agentd/internal/wire"
@@ -37,6 +38,7 @@ type Limits struct {
 	IdemTTL         time.Duration
 	MergeTimeout    time.Duration
 	PollInterval    time.Duration
+	Cache           objcache.Limits
 }
 
 // DefaultLimits are agent-vcs.md's local-daemon bounds where it states one
@@ -57,6 +59,9 @@ type Server struct {
 	now  func() time.Time
 	idem *idemStore
 
+	cache *objcache.Cache
+	objs  ObjectBackend // nil when the backend serves no objects
+
 	inflight atomic.Int64
 
 	mu       sync.Mutex
@@ -75,8 +80,9 @@ type mergeOp struct {
 // New returns a server over be.
 func New(be Backend, lim Limits) *Server {
 	now := time.Now
+	objs, _ := be.(ObjectBackend)
 	return &Server{
-		be: be, lim: lim, now: now,
+		be: be, lim: lim, now: now, cache: objcache.New(lim.Cache), objs: objs,
 		hub:      NewHub(be, lim.PollInterval, lim.MaxWatches),
 		idem:     newIdemStore(lim.MaxIdemRows, lim.IdemTTL, now),
 		sessions: map[string]string{}, known: map[string]bool{},
@@ -94,6 +100,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/verdict", s.verdict)
 	mux.HandleFunc("POST /v1/wait-verdict", s.wait)
 	mux.HandleFunc("POST /v1/merge", s.merge)
+	mux.HandleFunc("POST /v1/read-blob", s.readBlob)
+	mux.HandleFunc("POST /v1/read-tree", s.readTree)
 	// Operations whose guarantees need the forge answer UNSUPPORTED_BY_BACKEND,
 	// never a weaker imitation (agent-vcs.md, milestone A0).
 	mux.HandleFunc("POST /v1/lease/", s.unsupported)

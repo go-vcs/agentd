@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-vcs/agentd/internal/aerr"
+	"github.com/go-vcs/agentd/internal/gittree"
 	"github.com/go-vcs/agentd/internal/verdict"
 )
 
@@ -64,6 +65,30 @@ type MergeReply struct {
 	PR          int    `json:"pr"`
 	Commit      string `json:"commit"`
 	MergeCommit string `json:"merge_commit"`
+}
+
+// ObjectReq reads one blob or tree by its full id.
+type ObjectReq struct {
+	Session string `json:"session"`
+	Repo    string `json:"repo"`
+	ID      string `json:"id"`
+}
+
+// BlobReply carries a blob's bytes (standard base64) once the daemon has
+// recomputed the id from them. Cached says the answer came from the cache.
+type BlobReply struct {
+	ID      string `json:"id"`
+	Size    int    `json:"size"`
+	Content string `json:"content"`
+	Cached  bool   `json:"cached"`
+}
+
+// TreeReply carries a tree's entries once the daemon has recomputed the id from
+// the tree's raw bytes.
+type TreeReply struct {
+	ID      string          `json:"id"`
+	Entries []gittree.Entry `json:"entries"`
+	Cached  bool            `json:"cached"`
 }
 
 // ErrorBody is the body of every refusal.
