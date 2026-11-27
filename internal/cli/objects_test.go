@@ -55,6 +55,15 @@ func fakeDaemon(t *testing.T, mode string) string {
 		}
 		json.NewEncoder(w).Encode(wire.TreeReply{Entries: []gittree.Entry{{Mode: "100644", Name: "a", ID: strings.Repeat("ab", 20)}}})
 	})
+	mux.HandleFunc("/v1/materialize", func(w http.ResponseWriter, r *http.Request) {
+		if mode == "refuse" {
+			refuse(w)
+			return
+		}
+		var req wire.MaterializeReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		json.NewEncoder(w).Encode(wire.MaterializeReply{Commit: req.Commit, Dir: "/root/" + req.Dir, Files: len(req.Paths)})
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })

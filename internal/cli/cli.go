@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -62,7 +63,7 @@ func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 // DaemonCmd is forge-agentd.
 func DaemonCmd() *cobra.Command {
-	var socket, tokenFile, apiURL string
+	var socket, tokenFile, apiURL, matRoot string
 	var poll time.Duration
 	var cacheMB int64
 	var cacheEntries int
@@ -84,6 +85,11 @@ func DaemonCmd() *cobra.Command {
 			lim := daemon.DefaultLimits()
 			lim.PollInterval = poll
 			lim.Cache.MaxBytes, lim.Cache.MaxEntries = cacheMB<<20, cacheEntries
+			if matRoot != "" {
+				if lim.MaterializeRoot, err = PrepareRoot(matRoot); err != nil {
+					return err
+				}
+			}
 			l, err := sock.Listen(socket)
 			if err != nil {
 				return err
@@ -111,7 +117,42 @@ func DaemonCmd() *cobra.Command {
 	f.DurationVar(&poll, "poll-interval", 15*time.Second, "time between upstream reads for a commit being waited on")
 	f.Int64Var(&cacheMB, "cache-mb", 256, "object cache size in MiB (in memory; least recently used evicted)")
 	f.IntVar(&cacheEntries, "cache-entries", 100000, "most objects the cache holds")
+	f.StringVar(&matRoot, "materialize-root", DefaultMaterializeRoot(), "durable directory checkouts are written under, created 0700, never a temporary directory (empty: Materialize is refused)")
 	return cmd
+}
+
+// DefaultMaterializeRoot is where checkouts go unless told otherwise.
+func DefaultMaterializeRoot() string {
+	d, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "forge-agentd", "checkouts")
+}
+
+// PrepareRoot creates dir (0700) and returns its absolute, symlink-free path.
+// A directory under the system's temporary directory is refused: checkouts are
+// durable, and a temporary location can be cleaned away under a running agent.
+func PrepareRoot(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		tmp = os.TempDir()
+	}
+	if rel, err := filepath.Rel(tmp, real); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("materialize root %s is under the temporary directory; choose a durable one", real)
+	}
+	return real, nil
 }
 
 func defaultTokenFile() string {
@@ -253,7 +294,29 @@ func AgentCmd() *cobra.Command {
 			return nil
 		},
 	}
-	root.AddCommand(verdictCmd, waitCmd, mergeCmd, blobCmd, treeCmd)
+	var paths []string
+	matCmd := &cobra.Command{
+		Use:   "materialize <owner/repo> <full-commit-id> <dir>",
+		Short: "write a sparse checkout of a commit into a new directory under the daemon's checkout root",
+		Long: "Every tree and blob is verified against its id by the daemon before it is written. " +
+			"<dir> is relative to the daemon's --materialize-root and must not exist; --path (repeatable) " +
+			"restricts the checkout, no --path writes the whole tree. The result is a plain directory, not a git worktree.",
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			r, err := c.Materialize(cmd.Context(), args[0], args[1], args[2], paths)
+			if err != nil {
+				return report(cmd, err)
+			}
+			emit(cmd, r)
+			return nil
+		},
+	}
+	matCmd.Flags().StringArrayVar(&paths, "path", nil, "a file or directory to check out (repeatable; default: the whole tree)")
+	root.AddCommand(verdictCmd, waitCmd, mergeCmd, blobCmd, treeCmd, matCmd)
 	return root
 }
 

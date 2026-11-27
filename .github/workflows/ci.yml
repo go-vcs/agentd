@@ -68,6 +68,8 @@ jobs:
       - run: go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 20s ./internal/gittree
       - run: go test -run '^$' -fuzz '^FuzzDecodeBlob$' -fuzztime 20s ./internal/ghapi
       - run: go test -run '^$' -fuzz '^FuzzDecodeTree$' -fuzztime 20s ./internal/ghapi
+      - run: go test -run '^$' -fuzz '^FuzzDecodeCommit$' -fuzztime 20s ./internal/ghapi
+      - run: go test -run '^$' -fuzz '^FuzzElems$' -fuzztime 20s ./internal/materialize
       # The bomb tests assert a refusal and a bounded heap, under a memory limit.
       - run: go test -count=1 ./internal/objcache ./internal/daemon
         env:

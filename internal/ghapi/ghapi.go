@@ -517,6 +517,18 @@ func (c *Client) Object(ctx context.Context, repo, kind, id string) ([]byte, err
 			return nil, aerr.New(aerr.Unavailable, "upstream answer unreadable")
 		}
 		return d, nil
+	case "commit":
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/git/commits/"+id, nil, nil, &raw); err != nil {
+			return nil, err
+		}
+		d, err := DecodeCommit(raw)
+		if errors.Is(err, errBlobTooLarge) {
+			return nil, aerr.New(aerr.BoundExceeded, "commit larger than "+strconv.Itoa(MaxObject)+" bytes")
+		}
+		if err != nil {
+			return nil, aerr.New(aerr.Unavailable, "upstream answer unreadable")
+		}
+		return d, nil
 	}
-	return nil, aerr.New(aerr.Malformed, "kind must be blob or tree")
+	return nil, aerr.New(aerr.Malformed, "kind must be blob, tree or commit")
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-vcs/agentd/internal/aerr"
 	"github.com/go-vcs/agentd/internal/ghapi"
+	"github.com/go-vcs/agentd/internal/materialize"
 	"github.com/go-vcs/agentd/internal/objcache"
 	"github.com/go-vcs/agentd/internal/oid"
 	"github.com/go-vcs/agentd/internal/verdict"
@@ -39,6 +40,13 @@ type Limits struct {
 	MergeTimeout    time.Duration
 	PollInterval    time.Duration
 	Cache           objcache.Limits
+
+	// MaterializeRoot is the durable directory checkouts are written under; empty
+	// disables Materialize (NOT_PERMITTED). It is never a temporary directory.
+	MaterializeRoot string
+	MaterializeMax  int           // concurrent materializations
+	MaterializeTime time.Duration // longest one
+	Materialize     materialize.Limits
 }
 
 // DefaultLimits are agent-vcs.md's local-daemon bounds where it states one
@@ -48,6 +56,7 @@ func DefaultLimits() Limits {
 		MaxBody: 64 << 10, MaxInFlight: 64, MaxSessions: 64, MaxWaitsSession: 16,
 		MaxWatches: 256, MaxWait: time.Hour, MaxIdemRows: 100000, IdemTTL: 24 * time.Hour,
 		MergeTimeout: 2 * time.Minute, PollInterval: 15 * time.Second,
+		MaterializeMax: 4, MaterializeTime: 5 * time.Minute, Materialize: materialize.DefaultLimits(),
 	}
 }
 
@@ -63,6 +72,7 @@ type Server struct {
 	objs  ObjectBackend // nil when the backend serves no objects
 
 	inflight atomic.Int64
+	mats     atomic.Int64 // materializations running
 
 	mu       sync.Mutex
 	sessions map[string]string // label -> session id
@@ -102,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/merge", s.merge)
 	mux.HandleFunc("POST /v1/read-blob", s.readBlob)
 	mux.HandleFunc("POST /v1/read-tree", s.readTree)
+	mux.HandleFunc("POST /v1/materialize", s.materialize)
 	// Operations whose guarantees need the forge answer UNSUPPORTED_BY_BACKEND,
 	// never a weaker imitation (agent-vcs.md, milestone A0).
 	mux.HandleFunc("POST /v1/lease/", s.unsupported)
