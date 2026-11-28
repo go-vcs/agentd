@@ -43,6 +43,11 @@ type Limits struct {
 	MaxBytes   int64 // content plus overhead of everything held
 	MaxEntries int
 	MaxObject  int64 // largest single object admitted
+
+	// Disk, when set, is a second tier: a miss in memory is looked up there before
+	// the upstream is asked, and what the upstream returns is written there after
+	// it was verified. Whatever it returns is verified again by Admit.
+	Disk *Disk
 }
 
 // DefaultLimits: 256 MiB, 100000 entries, 2 MiB per object. The design's
@@ -214,15 +219,25 @@ func (c *Cache) Fetch(ctx context.Context, id string, fetch func(context.Context
 	}
 	cl := &call{done: make(chan struct{})}
 	c.inflight[id] = cl
-	c.st.Fetches++
 	c.mu.Unlock()
 
 	// The leader's fetch is not tied to its own ctx alone being cancelled for
 	// the followers: they get the leader's error and may retry.
-	cl.kind, cl.data, cl.err = fetch(ctx)
+	fromDisk := false
+	if c.lim.Disk != nil {
+		cl.kind, cl.data, fromDisk = c.lim.Disk.Get(id)
+	}
+	if !fromDisk {
+		c.mu.Lock()
+		c.st.Fetches++
+		c.mu.Unlock()
+		cl.kind, cl.data, cl.err = fetch(ctx)
+	}
 	if cl.err == nil {
 		if cl.err = c.Admit(id, cl.kind, cl.data); cl.err != nil {
 			cl.kind, cl.data = "", nil
+		} else if !fromDisk && c.lim.Disk != nil {
+			_ = c.lim.Disk.Put(id, cl.kind, cl.data) // a full or failing disk costs a refetch, not the answer
 		}
 	}
 	c.mu.Lock()

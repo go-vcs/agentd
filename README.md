@@ -92,11 +92,29 @@ Concurrent misses of one id share one upstream fetch.
 
 Bounds: 256 MiB (`--cache-mb`), 100000 entries (`--cache-entries`), 2 MiB per
 object; the least recently used is evicted; an object larger than the bound is
-`BOUND_EXCEEDED`. The cache is in memory (the design's 10 GiB default belongs to
-a disk-backed cache, not done) and is never offered to clones as alternates.
+`BOUND_EXCEEDED`. The memory tier is never offered to clones as alternates.
 The cache is keyed by id alone: a session that knows the id of an object in a
 repository the daemon can read, but another session asked about, can read it
 too. All sessions are the same uid and share the one credential.
+
+### Disk tier
+
+A second tier under `--cache-dir` (default `forge-agentd/objects` under the user
+cache dir; empty means memory only) lets a restarted daemon, or an object the
+memory tier evicted, be served without an upstream request. The directory is
+created 0700 and is refused when it is under the temporary directory, relative,
+or accessible to group or others; files are 0600, written to a temporary name
+and renamed, so a reader sees all of an object or none of it. An object is
+recomputed against its id when written and again on every read: a file that was
+edited, truncated, swapped for a link or directory, or planted is a miss, is
+removed and counted (`Corrupt`), and the upstream is asked again. A file whose
+size is over the per-object bound is refused from its size, never read. Bounds:
+10 GiB (`--cache-disk-mb`), 1000000 objects, 2 MiB per object; the oldest is
+evicted, and at start the directory is indexed, trimmed to the bounds and
+cleaned of strays and interrupted writes. A full or failing disk costs a refetch,
+never the answer (`WriteErrors` counts it). The record parser is fuzzed
+(`FuzzDecodeRecord`, corpus committed); the oversized-file bomb is a test under a
+64 MiB memory limit. Like the memory tier it is keyed by id alone.
 
 Benchmark row 4 (`BenchmarkVsGitCatFileBatch`, objcache) compares a cache hit
 with a long-lived `git cat-file --batch`. A cache hit allocates exactly 0 times
@@ -174,9 +192,9 @@ against 240 per poller (6240 an hour for these 26) without it.
 
 Done: verdicts, wait with one shared poller per commit, event stream over the
 same poller, gated merge, idempotent writes, session identities, peer-checked
-socket, structured errors, fuzzed parsers, verified object cache,
-`Materialize`. Not done: a true push feed from GitHub (none exists; the hub
-polls). Keychain credential option: done (`--token-keychain`). Leases, changes and change sets
+socket, structured errors, fuzzed parsers, verified object cache (memory and
+disk), `Materialize`. Not done: a true push feed from GitHub (none exists; the
+hub polls). Keychain credential option: done (`--token-keychain`). Leases, changes and change sets
 answer `UNSUPPORTED_BY_BACKEND` (milestone A3 and the forge backend, A4).
 
 The verdict logic in `internal/verdict` mirrors prwait's; extracting prwait's

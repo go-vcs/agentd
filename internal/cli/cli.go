@@ -21,6 +21,7 @@ import (
 	"github.com/go-vcs/agentd/internal/client"
 	"github.com/go-vcs/agentd/internal/daemon"
 	"github.com/go-vcs/agentd/internal/ghapi"
+	"github.com/go-vcs/agentd/internal/objcache"
 	"github.com/go-vcs/agentd/internal/sock"
 	"github.com/go-vcs/agentd/internal/verdict"
 )
@@ -63,9 +64,9 @@ func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 // DaemonCmd is forge-agentd.
 func DaemonCmd() *cobra.Command {
-	var socket, tokenFile, apiURL, matRoot, keychain string
+	var socket, tokenFile, apiURL, matRoot, keychain, cacheDir string
 	var poll time.Duration
-	var cacheMB int64
+	var cacheMB, diskMB int64
 	var cacheEntries int
 	cmd := &cobra.Command{
 		Use:           "forge-agentd",
@@ -99,6 +100,18 @@ func DaemonCmd() *cobra.Command {
 					return err
 				}
 			}
+			if cacheDir != "" {
+				dir, err := PrepareRoot(cacheDir)
+				if err != nil {
+					return err
+				}
+				disk, err := objcache.OpenDisk(dir, objcache.DiskLimits{MaxBytes: diskMB << 20})
+				if err != nil {
+					return err
+				}
+				defer disk.Close()
+				lim.Cache.Disk = disk
+			}
 			l, err := sock.Listen(socket)
 			if err != nil {
 				return err
@@ -127,8 +140,19 @@ func DaemonCmd() *cobra.Command {
 	f.DurationVar(&poll, "poll-interval", 15*time.Second, "time between upstream reads for a commit being waited on")
 	f.Int64Var(&cacheMB, "cache-mb", 256, "object cache size in MiB (in memory; least recently used evicted)")
 	f.IntVar(&cacheEntries, "cache-entries", 100000, "most objects the cache holds")
+	f.StringVar(&cacheDir, "cache-dir", DefaultCacheDir(), "durable directory of the disk cache, created 0700, never a temporary directory; every object is verified again when read (empty: memory only)")
+	f.Int64Var(&diskMB, "cache-disk-mb", 10240, "disk cache size in MiB (oldest evicted first)")
 	f.StringVar(&matRoot, "materialize-root", DefaultMaterializeRoot(), "durable directory checkouts are written under, created 0700, never a temporary directory (empty: Materialize is refused)")
 	return cmd
+}
+
+// DefaultCacheDir is where the disk cache lives unless told otherwise.
+func DefaultCacheDir() string {
+	d, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "forge-agentd", "objects")
 }
 
 // DefaultMaterializeRoot is where checkouts go unless told otherwise.

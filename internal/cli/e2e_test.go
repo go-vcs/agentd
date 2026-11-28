@@ -84,7 +84,7 @@ func startDaemon(t *testing.T) string {
 	c := DaemonCmd()
 	c.SetOut(out)
 	c.SetErr(errb)
-	c.SetArgs([]string{"--socket", sock, "--token-file", tokenFile(t), "--api-url", fakeGitHub(t), "--poll-interval", "5ms", "--materialize-root", ""})
+	c.SetArgs([]string{"--socket", sock, "--token-file", tokenFile(t), "--api-url", fakeGitHub(t), "--poll-interval", "5ms", "--materialize-root", "", "--cache-dir", ""})
 	done := make(chan error, 1)
 	go func() { done <- c.ExecuteContext(ctx) }()
 	t.Cleanup(func() {
@@ -212,9 +212,9 @@ func TestDaemonRefusals(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "file")
 	_ = os.WriteFile(f, nil, 0o600)
 	if runtime.GOOS == "windows" {
-		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "no peer credential check")
+		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh, "--cache-dir", ""), "no peer credential check")
 	} else {
-		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh), "socket directory")
+		want(run("--socket", filepath.Join(f, "d", "s"), "--token-file", tokenFile(t), "--api-url", gh, "--cache-dir", ""), "socket directory")
 	}
 	// The materialize root is refused before anything listens.
 	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", t.TempDir()), "temporary directory")
@@ -223,8 +223,40 @@ func TestDaemonRefusals(t *testing.T) {
 	// bad item name is the keychain reader's refusal, not the token file's.
 	want(run("--socket", good, "--token-file", tokenFile(t), "--token-keychain", "svc", "--api-url", gh), "alternatives")
 	want(run("--socket", good, "--token-keychain", "a b", "--api-url", gh), "item name")
+	// So is the disk cache's directory, and it is checked before anything listens.
+	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", "", "--cache-dir", t.TempDir()), "temporary directory")
+	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", "", "--cache-dir", "relative/dir"), "absolute")
+	// A durable cache directory open to others is refused by the disk tier.
+	if runtime.GOOS != "windows" {
+		base := t.TempDir()
+		open := filepath.Join(base, "open")
+		if err := os.Mkdir(open, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(open, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(base, "tmp")
+		if err := os.Mkdir(other, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TMPDIR", other) // so that base is no longer "the temporary directory"
+		want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", "", "--cache-dir", open), "mode 0700")
+	}
 	if err := run("--token-file", tokenFile(t), "extra"); err == nil {
 		t.Error("a positional argument was accepted")
+	}
+}
+
+func TestDefaultCacheDirWithoutACacheDir(t *testing.T) {
+	if got := DefaultCacheDir(); got == "" || !filepath.IsAbs(got) {
+		t.Errorf("default cache dir %q", got)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("LocalAppData", "") // windows
+	if got := DefaultCacheDir(); got != "" {
+		t.Errorf("default cache dir without a cache dir = %q", got)
 	}
 }
 
