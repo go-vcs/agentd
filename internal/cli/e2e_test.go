@@ -219,6 +219,10 @@ func TestDaemonRefusals(t *testing.T) {
 	// The materialize root is refused before anything listens.
 	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", t.TempDir()), "temporary directory")
 	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--materialize-root", "relative/dir"), "absolute")
+	// The keychain item replaces the token file; both at once is refused, and a
+	// bad item name is the keychain reader's refusal, not the token file's.
+	want(run("--socket", good, "--token-file", tokenFile(t), "--token-keychain", "svc", "--api-url", gh), "alternatives")
+	want(run("--socket", good, "--token-keychain", "a b", "--api-url", gh), "item name")
 	if err := run("--token-file", tokenFile(t), "extra"); err == nil {
 		t.Error("a positional argument was accepted")
 	}

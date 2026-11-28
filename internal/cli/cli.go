@@ -63,7 +63,7 @@ func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 // DaemonCmd is forge-agentd.
 func DaemonCmd() *cobra.Command {
-	var socket, tokenFile, apiURL, matRoot string
+	var socket, tokenFile, apiURL, matRoot, keychain string
 	var poll time.Duration
 	var cacheMB int64
 	var cacheEntries int
@@ -74,7 +74,16 @@ func DaemonCmd() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			tok, err := ghapi.ReadToken(tokenFile)
+			var tok string
+			var err error
+			if keychain != "" {
+				if cmd.Flags().Changed("token-file") {
+					return errors.New("--token-keychain and --token-file are alternatives: give one")
+				}
+				tok, err = ghapi.ReadKeychainToken(cmd.Context(), keychain)
+			} else {
+				tok, err = ghapi.ReadToken(tokenFile)
+			}
 			if err != nil {
 				return err
 			}
@@ -113,6 +122,7 @@ func DaemonCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&socket, "socket", DefaultSocket(), "unix socket to listen on (its directory is created 0700)")
 	f.StringVar(&tokenFile, "token-file", defaultTokenFile(), "file holding the GitHub token (mode 0600); never read from argv or the environment")
+	f.StringVar(&keychain, "token-keychain", "", "name of a system keychain item (macOS generic password, Linux Secret Service attribute service=<name>) holding the token, instead of --token-file")
 	f.StringVar(&apiURL, "api-url", "https://api.github.com", "GitHub REST base URL (https, or http on loopback)")
 	f.DurationVar(&poll, "poll-interval", 15*time.Second, "time between upstream reads for a commit being waited on")
 	f.Int64Var(&cacheMB, "cache-mb", 256, "object cache size in MiB (in memory; least recently used evicted)")
