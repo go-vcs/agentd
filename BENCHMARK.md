@@ -59,12 +59,26 @@ under test.
 
 ## Results
 
-not measured yet (load > 8)
+Measured 2026-11-28 on a shared macOS machine (arm64), with `forge-agentd` and
+`forge-agent` built from a clean clone of tag `v0.4.1` (2cf739b2) and
+`forge-bench` from this branch. 5 rounds under the bound, 1 attempt dropped.
+Every variant produced the same tree (23 files, 98612 bytes).
 
-| variant | rounds | median s | min-max s | requests | bytes | files | tree bytes |
-|---|---|---|---|---|---|---|---|
-| agentd-cold | | | | | | | |
-| agentd-warm | | | | | | | |
-| agentd-disk | | | | | | | |
-| git-full | | | | | | | |
-| git-sparse | | | | | | | |
+| variant | rounds | median s | min-max s | upstream requests (median) | upstream bytes (median) |
+|---|---|---|---|---|---|
+| agentd-cold | 5 | 3.56 | 3.33-3.83 | 36 | 72582 |
+| agentd-warm | 5 | 0.01 | 0.01-0.01 | 0 | 0 |
+| agentd-disk | 5 | 0.01 | 0.01-0.01 | 0 | 0 |
+| git-full | 5 | 0.64 | 0.58-0.71 | 3 | 374798 |
+| git-sparse | 5 | 1.01 | 0.97-1.21 | 5 | 88759 |
+
+Load (1 min / 5 min) before each round: 7.86 / 5.89, 7.87 / 5.93, 7.17 / 5.99,
+7.08 / 5.99, 6.91 / 5.97; the 1-minute load after a round reached 8.04 once
+(after round 2), and the attempt that followed (8.04 / 5.99) was dropped. The
+load was close to the bound all along, so read the times as
+indicative; the request and byte counts are exact.
+
+Reading: warm and disk-warm agentd are two orders of magnitude faster than any
+git variant, and agentd fetches fewer bytes than either (about 73 KB against 89
+KB for the blobless sparse clone), but a cold agentd takes 3.56 s against 1.01 s
+for the sparse clone, over 36 upstream requests against 5.

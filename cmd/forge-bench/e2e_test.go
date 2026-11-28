@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,9 @@ const testCommit = "0123456789abcdef0123456789abcdef01234567"
 // fixture is a configuration whose binaries are the fakes of fakes_test.go.
 func fixture(t *testing.T) (config, string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the harness measures on POSIX machines: it reads uptime(1) and runs git from PATH")
+	}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("0123456789"))
 	}))
