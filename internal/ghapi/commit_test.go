@@ -97,7 +97,7 @@ func TestDecodeCommitSigned(t *testing.T) {
 	payload := "tree " + emptyTree + "\nauthor A <a@x> 1 +0000\ncommitter A <a@x> 1 +0000\n\nsigned message\n"
 	sig := "-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEE\n=abcd\n-----END PGP SIGNATURE-----"
 	want := "tree " + emptyTree + "\nauthor A <a@x> 1 +0000\ncommitter A <a@x> 1 +0000\n" +
-		"gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEE\n =abcd\n -----END PGP SIGNATURE-----\n" +
+		"gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEE\n =abcd\n -----END PGP SIGNATURE-----\n \n" +
 		"\nsigned message\n"
 	b, _ := json.Marshal(map[string]any{"verification": map[string]any{"payload": payload, "signature": sig + "\n"}})
 	got, err := DecodeCommit(b)

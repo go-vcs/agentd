@@ -64,7 +64,7 @@ func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 // DaemonCmd is forge-agentd.
 func DaemonCmd() *cobra.Command {
-	var socket, tokenFile, apiURL, matRoot, keychain, cacheDir string
+	var socket, tokenFile, apiURL, gitURL, matRoot, keychain, cacheDir string
 	var poll time.Duration
 	var cacheMB, diskMB int64
 	var cacheEntries int
@@ -91,6 +91,16 @@ func DaemonCmd() *cobra.Command {
 			gh, err := ghapi.New(apiURL, tok)
 			if err != nil {
 				return err
+			}
+			// The default git host goes with the default API only: a test or an
+			// enterprise API must name its own, or commits are read through the API.
+			if gitURL == "" && isDefaultAPI(apiURL) {
+				gitURL = "https://github.com"
+			}
+			if gitURL != "" {
+				if err := gh.SetGitURL(gitURL); err != nil {
+					return err
+				}
 			}
 			lim := daemon.DefaultLimits()
 			lim.PollInterval = poll
@@ -136,6 +146,7 @@ func DaemonCmd() *cobra.Command {
 	f.StringVar(&socket, "socket", DefaultSocket(), "unix socket to listen on (its directory is created 0700)")
 	f.StringVar(&tokenFile, "token-file", defaultTokenFile(), "file holding the GitHub token (mode 0600); never read from argv or the environment")
 	f.StringVar(&keychain, "token-keychain", "", "name of a system keychain item (macOS generic password, Linux Secret Service attribute service=<name>) holding the token, instead of --token-file")
+	f.StringVar(&gitURL, "git-url", "", "git smart-HTTP base URL that serves commits as git wrote them (https, or http on loopback); default https://github.com with the default --api-url, none otherwise")
 	f.StringVar(&apiURL, "api-url", "https://api.github.com", "GitHub REST base URL (https, or http on loopback)")
 	f.DurationVar(&poll, "poll-interval", 15*time.Second, "time between upstream reads for a commit being waited on")
 	f.Int64Var(&cacheMB, "cache-mb", 256, "object cache size in MiB (in memory; least recently used evicted)")

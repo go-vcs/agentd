@@ -209,6 +209,7 @@ func TestDaemonRefusals(t *testing.T) {
 	}
 	want(run("--socket", good, "--token-file", filepath.Join(t.TempDir(), "none"), "--api-url", gh), "token file")
 	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", "ftp://x"), "scheme must be https")
+	want(run("--socket", good, "--token-file", tokenFile(t), "--api-url", gh, "--git-url", "ftp://x"), "git url: scheme must be https")
 	f := filepath.Join(t.TempDir(), "file")
 	_ = os.WriteFile(f, nil, 0o600)
 	if runtime.GOOS == "windows" {

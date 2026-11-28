@@ -1,0 +1,29 @@
+tree 3bfe0be69bc66056f15e23c5844e8e4d9bcb73e2
+parent 732b6e497d7f831b1639b8f7d33874d845d348f3
+author tannevaled <tannevaled@users.noreply.github.com> 1795796531 +0100
+committer GitHub <noreply@github.com> 1795796531 +0100
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ wsFcBAABCAAQBQJrCa4zCRC1aQ7uu5UhlAAArP0QAE/kmft0DqSFitrysuRHS9iz
+ EJZXM9kgqREjjUe7IRJFezprtHX9pZN/RSQ81n1/PWlQcvmrXpSnQxRTeMQgsbz+
+ kh8t4tYq4NwHixfhVpPKzN7nl2cwe+CgnfZrrP8r5SeLq2euLLdSsgKDOnwCArWX
+ yDjDJ7R43q3pvPTzht1Gp01DDzrNPwH+fU3ndeocq3wZp3I/HRJMsnHN1Adue8Hw
+ XcHp6aUgSS79OCcQJP679/ydpISSauZpl3jO90DQ/yCFHflMh+Kg+8clDSkiiLLE
+ Bq39vL/03NgDgE26rs6mvDl6sJasmAiVb+KX9LQr2Kqi0nz09lERIW8U3qKYtM3I
+ hUmZTrFrr/JoyQeC1keJStAZmz3AePQfy3hygmN3ZmIT/orYxVRP8HYFQdTO+5ZP
+ psmpVGx0JrSY9SWxJtoN//qBtpPBMu/eSi8bZmQBcPiN3Y8etZv+BW6oNuef35yG
+ cyN65A2GYScuJwwNGEm1aEVAu2cuyxqCAx8TRzaDI5J45iTou2JQwzED5ph4bnhj
+ cR9ugzSVRkwgGd2AULIHnExrzgPoGrE7Z0jI21YIv6oKjz64ony6TWn8TWLKoDpF
+ NAswgOcliG4yu/wvmXBH9TdiE5KsOt2IaTgmhaboYM8UR9myOXQ+59LWhW5+s0Mh
+ VwWF+ElPfeWGRkDIA7AE
+ =XJZW
+ -----END PGP SIGNATURE-----
+ 
+
+forgectl oidc set-client: the help names the router's callback path (#24)
+
+The help said /auth/callback; the router serves GET /callback. The path
+is now the constant web.CallbackPath, used by the route, and a test
+fails if the help stops naming it.
+
+Co-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>

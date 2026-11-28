@@ -42,7 +42,12 @@ type commitReply struct {
 // id mismatch, never guessed at.
 //
 // A signed commit is rebuilt from verification.payload (the commit as signed)
-// plus its gpgsig header; any other commit from its fields.
+// plus its gpgsig header; any other commit from its fields. The answer does not
+// say whether the message ended with a newline (it did not for the signed golden
+// commit in testdata, it did for the unsigned one) and drops the offset of an
+// unsigned commit's dates, so only a signed commit is rebuilt exactly. The
+// daemon reads commits from the git endpoint (fetchCommit) and keeps this
+// rebuild for an upstream that has none (--git-url unset on a non-GitHub API).
 func DecodeCommit(b []byte) ([]byte, error) {
 	var r commitReply
 	if err := json.Unmarshal(b, &r); err != nil {
@@ -56,9 +61,10 @@ func DecodeCommit(b []byte) ([]byte, error) {
 			if i < 0 {
 				return nil, errors.New("commit payload has no message separator")
 			}
-			sig := strings.TrimSuffix(*s, "\n")
+			// git writes each line of the signature after "gpgsig " or a space, and a
+			// signature that ends with a newline ends with an empty continuation line.
 			raw = append(raw, payload[:i+1]...)
-			raw = append(raw, "gpgsig "+strings.ReplaceAll(sig, "\n", "\n ")+"\n"...)
+			raw = append(raw, "gpgsig "+strings.ReplaceAll(*s, "\n", "\n ")+"\n"...)
 			raw = append(raw, payload[i+1:]...)
 		} else {
 			raw = payload

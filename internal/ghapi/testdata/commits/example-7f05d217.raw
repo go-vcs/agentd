@@ -1,0 +1,15 @@
+tree 941d9c65340dad68dc7e8c65344bb80f7cd3c899
+parent 53021d5c81c3add612aadcc6ffa2cc33a65d07f7
+author Rob Findley <rfindley@google.com> 1757966164 +0000
+committer Gopher Robot <gobot@golang.org> 1757967037 -0700
+
+internal/cmd/weave: print two levels of headings in TOC
+
+Print up to two levels of headings, independent of the root depth of the
+table of contents.
+
+Change-Id: I75c07a5983b2af2639ebb9bf76e4189a7b114143
+Reviewed-on: https://go-review.googlesource.com/c/example/+/703975
+Auto-Submit: Robert Findley <rfindley@google.com>
+Reviewed-by: Alan Donovan <adonovan@google.com>
+LUCI-TryBot-Result: Go LUCI <golang-scoped@luci-project-accounts.iam.gserviceaccount.com>

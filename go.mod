@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	github.com/go-fleettools/prwait v0.17.0
+	github.com/go-vcs/gitproto v0.1.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.50.0
 )
