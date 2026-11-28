@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -90,7 +89,7 @@ func OpenDisk(dir string, l DiskLimits) (*Disk, error) {
 	if err != nil {
 		return nil, err
 	}
-	if fi, err := root.Stat("."); err != nil || !fi.IsDir() || runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := root.Stat("."); err != nil || !fi.IsDir() || dirOpenToOthers(fi) {
 		root.Close()
 		return nil, fmt.Errorf("disk cache directory %s must be a directory with mode 0700", dir)
 	}

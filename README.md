@@ -116,6 +116,11 @@ never the answer (`WriteErrors` counts it). The record parser is fuzzed
 (`FuzzDecodeRecord`, corpus committed); the oversized-file bomb is a test under a
 64 MiB memory limit. Like the memory tier it is keyed by id alone.
 
+Windows gap: Go reports every Windows directory's mode bits as 0777, so the
+owner-only (0700) refusal is Unix only and is skipped on Windows. The
+directory's access control list is not checked there: on Windows the cache
+directory's privacy is not verified, it rests on the user's profile directory.
+
 Benchmark row 4 (`BenchmarkVsGitCatFileBatch`, objcache) compares a cache hit
 with a long-lived `git cat-file --batch`. A cache hit allocates exactly 0 times
 (asserted). Timings are not recorded yet: the benchmark only runs when the
