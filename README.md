@@ -47,10 +47,32 @@ safely after a timeout.
   is not the daemon's is dropped. Where peer credentials are unavailable the
   daemon refuses to serve.
 - The token file must be a regular file, mode 0600, one token, at most 1 KiB.
+  `--token-keychain <item>` reads it from the system keychain instead (see
+  below); giving both is refused.
 - Writes carry a 32-hex request id; the same id with a different body is
   `REQUEST_ID_REUSED`, with the same body it replays the first answer.
 - Sessions are per label with their own identity; a change set holds at most 64
   repos.
+
+## Keychain credential
+
+    security add-generic-password -s forge-agentd.github -a "$USER" -w   # macOS, prompts for the token
+    forge-agentd --token-keychain forge-agentd.github
+
+The token can live in the system keychain instead of a file: a macOS generic
+password, or on Linux a Secret Service item with the attribute
+`service=<item>` (read with `secret-tool`). The daemon runs `/usr/bin/security
+find-generic-password -s <item> -w` or `/usr/bin/secret-tool lookup service
+<item>` by absolute path, so only the item name is on a command line; the secret
+comes back on a pipe, never through argv, the environment or a file. The program
+gets a minimal environment (HOME, USER, LOGNAME, the session bus address and
+XDG_RUNTIME_DIR, nothing else), runs for at most 30 s (a locked keychain may
+wait for a person), and its output is read up to 1 KiB, after which it is
+killed. The answer must be one token, as for the token file. Its standard error
+is dropped and no error text carries what it printed. The item name is 1 to 128
+letters, digits, dots, underscores or hyphens, not starting with a hyphen. Other
+platforms are refused. Each case has a test run against a helper program in
+place of the real keychain.
 
 ## Bounds (each has a refusing test)
 
@@ -154,7 +176,7 @@ Done: verdicts, wait with one shared poller per commit, event stream over the
 same poller, gated merge, idempotent writes, session identities, peer-checked
 socket, structured errors, fuzzed parsers, verified object cache,
 `Materialize`. Not done: a true push feed from GitHub (none exists; the hub
-polls), keychain credential option. Leases, changes and change sets
+polls). Keychain credential option: done (`--token-keychain`). Leases, changes and change sets
 answer `UNSUPPORTED_BY_BACKEND` (milestone A3 and the forge backend, A4).
 
 The verdict logic in `internal/verdict` mirrors prwait's; extracting prwait's

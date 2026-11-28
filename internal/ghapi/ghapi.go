@@ -77,12 +77,26 @@ func ReadToken(path string) (string, error) {
 	// A read error on a regular file just opened (EIO) leaves a short or empty
 	// buffer, which the checks below refuse.
 	b, _ := io.ReadAll(io.LimitReader(f, maxToken+1))
+	return parseToken(b, "token file")
+}
+
+// parseToken turns what a credential source returned into one token: at most
+// 1 KiB, one word. what names the source in the error, which never holds the
+// value.
+func parseToken(b []byte, what string) (string, error) {
 	if len(b) > maxToken {
-		return "", errors.New("token file: larger than 1 KiB")
+		return "", errors.New(what + ": larger than 1 KiB")
 	}
 	tok := strings.TrimSpace(string(b))
-	if tok == "" || strings.ContainsAny(tok, " \t\r\n") {
-		return "", errors.New("token file: empty or not a single token")
+	if tok == "" {
+		return "", errors.New(what + ": empty or not a single token")
+	}
+	// A token goes into a header: printable ASCII without a space, nothing else
+	// (a NUL or other control byte would corrupt the header).
+	for i := 0; i < len(tok); i++ {
+		if tok[i] <= ' ' || tok[i] > '~' {
+			return "", errors.New(what + ": empty or not a single token")
+		}
 	}
 	return tok, nil
 }
