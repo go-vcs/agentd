@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/go-vcs/agentd/internal/aerr"
@@ -30,6 +31,58 @@ func (f fetcher) Tree(ctx context.Context, id string) ([]gittree.Entry, error) {
 func (f fetcher) Blob(ctx context.Context, id string) ([]byte, error) {
 	d, _, err := f.s.object(ctx, f.repo, objcache.Blob, id)
 	return d, err
+}
+
+// MaxFetchWorkers caps Limits.FetchWorkers, so a misconfiguration cannot turn
+// one checkout into a flood the forge answers with its secondary rate limit.
+const MaxFetchWorkers = 32
+
+// Prefetch is the bulk path: it fetches the blobs concurrently, at most
+// FetchWorkers at a time, into the verified cache, so the sequential writer
+// finds them there. Every object still goes through Server.object, so each is
+// recomputed against its id once, and one id is fetched once however many
+// workers want it. The first error stops the rest.
+func (f fetcher) Prefetch(ctx context.Context, ids []string) error {
+	n := f.s.lim.FetchWorkers
+	if n < 1 {
+		n = 1
+	}
+	if n > MaxFetchWorkers {
+		n = MaxFetchWorkers
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		once  sync.Once
+		first error
+	)
+	next := make(chan string)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range next {
+				if _, _, err := f.s.object(ctx, f.repo, objcache.Blob, id); err != nil {
+					once.Do(func() { first = err; cancel() })
+				}
+			}
+		}()
+	}
+feed:
+	for _, id := range ids {
+		select {
+		case next <- id:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(next)
+	wg.Wait()
+	if first != nil {
+		return first
+	}
+	return ctx.Err()
 }
 
 // commitTree returns the tree id a verified commit names. The commit is

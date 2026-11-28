@@ -47,6 +47,9 @@ type Limits struct {
 	MaterializeMax  int           // concurrent materializations
 	MaterializeTime time.Duration // longest one
 	Materialize     materialize.Limits
+	// FetchWorkers is how many blobs one materialization fetches at once (the bulk
+	// path); the upstream sees at most MaterializeMax times this many requests.
+	FetchWorkers int
 }
 
 // DefaultLimits are agent-vcs.md's local-daemon bounds where it states one
@@ -57,6 +60,7 @@ func DefaultLimits() Limits {
 		MaxWatches: 256, MaxWait: time.Hour, MaxIdemRows: 100000, IdemTTL: 24 * time.Hour,
 		MergeTimeout: 2 * time.Minute, PollInterval: 15 * time.Second,
 		MaterializeMax: 4, MaterializeTime: 5 * time.Minute, Materialize: materialize.DefaultLimits(),
+		FetchWorkers: 8,
 	}
 }
 

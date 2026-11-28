@@ -107,11 +107,17 @@ planted in the root cannot carry a write outside it. A failure removes what
 was written. A submodule becomes an empty directory, as in git. At most 4
 materializations run at once (`RATE_LIMITED`), each for at most 5 minutes.
 
-Known limit: objects are fetched one at a time (one REST call per tree and per
-blob); there is no bulk path yet, so a large checkout is slower than
-`git clone` and costs one API request per object. Timings are not recorded:
-the benchmark against `git clone` and sparse checkout only runs when the
-1-minute and 5-minute loads are both at most 8.
+Blobs are fetched in bulk: the tree walk collects every file first, then the
+blobs are prefetched concurrently, in chunks of 32 ids, by 8 workers
+(`Limits.FetchWorkers`, capped at 32; one worker is sequential) through the
+object cache, so each blob is still verified against its id once and concurrent
+requests for one id share a fetch. The first error cancels the rest and the
+destination is removed. The file bound is checked before any blob is fetched,
+and the 5-minute limit is unchanged. Trees are still read one REST call each,
+and each blob is one call: the gain is overlap, not fewer requests, so a large
+checkout costs one API request per object. Timings are not recorded: the
+benchmark against `git clone` and sparse checkout only runs when the 1-minute
+and 5-minute loads are both at most 8.
 
 ## Events
 
