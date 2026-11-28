@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("000dpackfile\n0006\x03f0000")

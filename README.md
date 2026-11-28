@@ -137,9 +137,14 @@ refused, and an empty `--materialize-root` disables the call:
 `NOT_PERMITTED`). The result is a plain directory, not a git worktree. Without
 `--path` the whole tree is written; a path may name a file or a directory.
 Every commit, tree and blob is verified against its id by the object cache
-before it is written (GitHub's commit JSON is rebuilt into git's raw commit;
-a commit it cannot rebuild exactly, for example one with extra headers, is
-refused as `OBJECT_MISMATCH` rather than trusted).
+before it is written. A commit is read as git wrote it, from the git
+smart-HTTP endpoint (`--git-url`, default `https://github.com` with the default
+`--api-url`): one protocol-v2 `fetch` of that commit alone (`deepen 1`,
+`filter tree:0`), whose pack is checked against its own checksum and holds
+exactly one whole commit. The REST commit JSON cannot be rebuilt into git's
+raw commit (it drops the offset of an unsigned commit's dates), so it is used
+only when no git URL is set; a commit that does not hash to its id is refused
+as `OBJECT_MISMATCH` rather than trusted.
 
 What is refused, with a test each: a destination that exists (`CONFLICT`, the
 existing directory is never touched); a destination or path with `..`, an

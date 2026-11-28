@@ -53,6 +53,7 @@ func ValidRepo(s string) bool {
 // Client talks to the GitHub REST API.
 type Client struct {
 	base        *url.URL
+	git         *url.URL // git smart-HTTP host; nil reads commits through the API
 	token       string
 	hc          *http.Client
 	maxResponse int64
@@ -104,19 +105,9 @@ func parseToken(b []byte, what string) (string, error) {
 // New builds a client. apiURL must be https, or http on a loopback address
 // (tests): a token is never sent in clear over a network.
 func New(apiURL, token string) (*Client, error) {
-	u, err := url.Parse(apiURL)
-	if err != nil || u.Host == "" {
-		return nil, errors.New("api url: not a URL")
-	}
-	switch u.Scheme {
-	case "https":
-	case "http":
-		host, _, _ := net.SplitHostPort(u.Host)
-		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			return nil, errors.New("api url: http is allowed on loopback only")
-		}
-	default:
-		return nil, errors.New("api url: scheme must be https")
+	u, err := checkBaseURL(apiURL, "api url")
+	if err != nil {
+		return nil, err
 	}
 	if token == "" {
 		return nil, errors.New("no token")
@@ -129,6 +120,38 @@ func New(apiURL, token string) (*Client, error) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
+}
+
+// checkBaseURL parses a base URL a token will be sent to: https, or http on a
+// loopback address (tests). what names it in the error.
+func checkBaseURL(s, what string) (*url.URL, error) {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return nil, errors.New(what + ": not a URL")
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		host, _, _ := net.SplitHostPort(u.Host)
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return nil, errors.New(what + ": http is allowed on loopback only")
+		}
+	default:
+		return nil, errors.New(what + ": scheme must be https")
+	}
+	return u, nil
+}
+
+// SetGitURL names the git smart-HTTP host that serves commits as git wrote
+// them (see fetchCommit). Without it a commit is rebuilt from the REST answer,
+// which cannot carry the author and committer offsets of an unsigned commit.
+func (c *Client) SetGitURL(s string) error {
+	u, err := checkBaseURL(s, "git url")
+	if err != nil {
+		return err
+	}
+	c.git = u
+	return nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, q url.Values, body any, out any) error {
@@ -532,6 +555,9 @@ func (c *Client) Object(ctx context.Context, repo, kind, id string) ([]byte, err
 		}
 		return d, nil
 	case "commit":
+		if c.git != nil {
+			return c.fetchCommit(ctx, repo, id)
+		}
 		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/git/commits/"+id, nil, nil, &raw); err != nil {
 			return nil, err
 		}

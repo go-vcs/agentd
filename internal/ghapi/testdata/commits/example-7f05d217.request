@@ -1,0 +1,9 @@
+0012command=fetch
+0017agent=forge-agentd
+0017object-format=sha1
+00010010no-progress
+0012filter tree:0
+0032want 7f05d217867b2af52b0a28c6d1c91df97e1b5b39
+000ddeepen 1
+0009done
+0000
