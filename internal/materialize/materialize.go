@@ -138,7 +138,26 @@ type writer struct {
 	lim   Limits
 	res   Result
 	trees int
+	jobs  []job // blobs and links found by the walk, written by flush
 }
+
+// job is one file or symbolic link still to be written.
+type job struct {
+	dir []string
+	e   gittree.Entry
+}
+
+// Prefetcher is an optional Fetcher extension: a bulk path. Prefetch makes the
+// objects (blob ids) cheap to fetch next, concurrently, under the
+// implementation's own bound; it verifies nothing the later Blob call does not
+// verify again, and an error from it is only returned, never trusted.
+type Prefetcher interface {
+	Prefetch(ctx context.Context, ids []string) error
+}
+
+// PrefetchChunk is how many blobs are announced to a Prefetcher at once: with
+// the cache's 2 MiB per-object bound that keeps the prefetched set under 64 MiB.
+const PrefetchChunk = 32
 
 // Write materializes the tree treeID, restricted to paths (empty: the whole
 // tree), as the new directory dir under root. dir must not exist.
@@ -184,7 +203,35 @@ func write(ctx context.Context, root fsRoot, dir, treeID string, paths []string,
 		_ = root.RemoveAll(dir)
 		return Result{}, err
 	}
+	if err := w.flush(); err != nil {
+		_ = root.RemoveAll(dir)
+		return Result{}, err
+	}
 	return w.res, nil
+}
+
+// flush writes the jobs the walk collected, announcing each chunk of blobs to
+// the fetcher's bulk path first when it has one.
+func (w *writer) flush() error {
+	pf, bulk := w.f.(Prefetcher)
+	for i := 0; i < len(w.jobs); i += PrefetchChunk {
+		chunk := w.jobs[i:min(i+PrefetchChunk, len(w.jobs))]
+		if bulk {
+			ids := make([]string, len(chunk))
+			for j, jb := range chunk {
+				ids[j] = jb.e.ID
+			}
+			if err := pf.Prefetch(w.ctx, ids); err != nil {
+				return err
+			}
+		}
+		for _, jb := range chunk {
+			if err := w.file(jb.dir, jb.e); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // fsError maps a filesystem error; nil stays nil.
@@ -294,9 +341,17 @@ func (w *writer) entry(dir []string, e gittree.Entry) error {
 		// A submodule: git leaves an empty directory.
 		return w.mkdir(rel)
 	}
-	if w.res.Files >= w.lim.MaxFiles {
+	if len(w.jobs) >= w.lim.MaxFiles {
 		return aerr.New(aerr.BoundExceeded, "too many files")
 	}
+	w.jobs = append(w.jobs, job{dir: dir, e: e})
+	return nil
+}
+
+// file fetches and writes one file or symbolic link of the walk.
+func (w *writer) file(dir []string, e gittree.Entry) error {
+	rel := append(append([]string{}, dir...), e.Name)
+	p := strings.Join(rel, "/")
 	data, err := w.f.Blob(w.ctx, e.ID)
 	if err != nil {
 		return err
