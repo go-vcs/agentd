@@ -94,7 +94,7 @@ func DaemonCmd() *cobra.Command {
 			}
 			// The default git host goes with the default API only: a test or an
 			// enterprise API must name its own, or commits are read through the API.
-			if gitURL == "" && apiURL == "https://api.github.com" {
+			if gitURL == "" && isDefaultAPI(apiURL) {
 				gitURL = "https://github.com"
 			}
 			if gitURL != "" {

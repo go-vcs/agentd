@@ -216,29 +216,113 @@ func TestParseCommitPackRefusals(t *testing.T) {
 			return resum(append(p[:len(p)-20:len(p)-20], 'x', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 		}),
 		"not zlib":  mut(func(p []byte) []byte { p[13] ^= 0xff; return resum(p) }),
-		"huge size": onePack(1, MaxObject, nil),
+		"huge size": onePack(1, MaxObject+1, nil),
 	} {
 		if got, err := parseCommitPack(p, 40); err == nil {
 			t.Errorf("%s: accepted %q", name, got)
 		}
 	}
-	if _, err := parseCommitPack(onePack(1, MaxObject, nil), 40); err != errBlobTooLarge {
+	// DecodeCommit keeps a commit of MaxObject bytes and refuses one byte more:
+	// so does the pack reader. MaxObject itself gets as far as the (absent) body.
+	if _, err := parseCommitPack(onePack(1, MaxObject+1, nil), 40); err != errBlobTooLarge {
+		t.Errorf("a commit of MaxObject+1 bytes: %v", err)
+	}
+	if _, err := parseCommitPack(onePack(1, MaxObject, nil), 40); err == errBlobTooLarge || err == nil {
 		t.Errorf("a commit of MaxObject bytes: %v", err)
 	}
 }
 
 func TestSetGitURLRefusals(t *testing.T) {
 	c, _ := New("https://api.example.org", "tok")
-	for _, u := range []string{"ftp://x", "http://example.org", "not a url", ""} {
+	for _, u := range []string{
+		"ftp://x", "http://example.org", "not a url", "",
+		"https://user:" + "pw" + "@example.org", "https://user" + "@example.org",
+		"https://example.org/?x=1", "https://example.org/?", "https://example.org/#f", "https://example.org#",
+	} {
 		if err := c.SetGitURL(u); err == nil {
 			t.Errorf("%q accepted", u)
 		}
 		if c.git != nil {
 			t.Fatalf("%q left a git URL behind", u)
 		}
+		if _, err := New(u, "tok"); err == nil && u != "" {
+			t.Errorf("New accepted %q", u)
+		}
 	}
-	if err := c.SetGitURL("http://127.0.0.1:1"); err != nil {
-		t.Errorf("loopback http refused: %v", err)
+	for _, u := range []string{"http://127.0.0.1:1", "http://127.0.0.1", "http://localhost", "http://[::1]", "http://[::1]:8080/base"} {
+		if err := c.SetGitURL(u); err != nil {
+			t.Errorf("loopback %q refused: %v", u, err)
+		}
+	}
+}
+
+func packResponse(pack []byte, f func(w *pktline.Writer, pack []byte)) []byte {
+	var b bytes.Buffer
+	w := pktline.NewWriter(&b)
+	_ = w.Text("packfile")
+	f(w, pack)
+	return b.Bytes()
+}
+
+func TestObjectCommitThroughGitFraming(t *testing.T) {
+	raw := golden(t, "example-7f05d217", "raw")
+	pack := onePack(1, len(raw), raw)
+	id := goldens[0].id
+	for name, body := range map[string][]byte{
+		// the answer ends right after the last data packet, without a flush
+		"eof without flush": packResponse(pack, func(w *pktline.Writer, p []byte) { _ = w.Sideband(1, p) }),
+		"progress band": packResponse(pack, func(w *pktline.Writer, p []byte) {
+			_ = w.Sideband(2, []byte("counting"))
+			_ = w.Sideband(1, p)
+			_ = w.Flush()
+		}),
+		"split data": packResponse(pack, func(w *pktline.Writer, p []byte) { _ = w.Sideband(1, p[:30]); _ = w.Sideband(1, p[30:]); _ = w.Flush() }),
+	} {
+		c := gitServer(t, 200, body, nil, nil)
+		got, err := c.Object(context.Background(), "o/r", "commit", id)
+		if err != nil || !bytes.Equal(got, raw) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// No data at all before the end of the answer is not a pack.
+	c := gitServer(t, 200, packResponse(nil, func(*pktline.Writer, []byte) {}), nil, nil)
+	if _, err := c.Object(context.Background(), "o/r", "commit", id); aerr.As(err).Reason != aerr.Unavailable {
+		t.Errorf("no data: %v", err)
+	}
+}
+
+func TestObjectCommitThroughGitWireBound(t *testing.T) {
+	chunk := bytes.Repeat([]byte{'x'}, 60000)
+	big := packResponse(nil, func(w *pktline.Writer, _ []byte) {
+		for n := 0; n <= maxFetchWire/len(chunk)+1; n++ {
+			_ = w.Sideband(1, chunk)
+		}
+	})
+	c := gitServer(t, 200, big, nil, nil)
+	if _, err := c.Object(context.Background(), "o/r", "commit", goldens[0].id); aerr.As(err).Reason != aerr.BoundExceeded {
+		t.Errorf("an answer past the wire bound: %v", err)
+	}
+}
+
+func TestObjectCommitThroughGitDoesNotFollowRedirects(t *testing.T) {
+	hit := make(chan string, 1)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit <- r.Header.Get("Authorization")
+	}))
+	t.Cleanup(other.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/x", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := New(srv.URL, "tok")
+	_ = c.SetGitURL(srv.URL)
+	if _, err := c.Object(context.Background(), "o/r", "commit", goldens[0].id); err == nil {
+		t.Error("a redirect was taken for an answer")
+	}
+	select {
+	case a := <-hit:
+		t.Errorf("the redirect target was reached (Authorization %q)", a)
+	default:
 	}
 }
 
@@ -289,19 +373,44 @@ func TestReadCommitPackReadErrorIsReturned(t *testing.T) {
 }
 
 func FuzzReadCommitPack(f *testing.F) {
+	// The input is the pack ENTRY (type and size header, then the deflated body):
+	// the harness adds the pack header and recomputes the SHA-1 trailer, which
+	// random bytes never would, so the varint and zlib paths are reached.
+	entry := func(p []byte) []byte { return p[12 : len(p)-20] }
 	for _, g := range goldens {
-		f.Add(golden(f, g.name, "fetch"))
+		raw := golden(f, g.name, "raw")
+		f.Add(entry(onePack(1, len(raw), raw)))
 	}
-	f.Add([]byte("0009ERR x\n"))
-	f.Add([]byte("PACK\x00\x00\x00\x02\x00\x00\x00\x01"))
+	body := []byte("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\nm\n")
+	f.Add(entry(onePack(1, len(body), body)))                     // good
+	f.Add(entry(onePack(1, len(body)+1, body)))                   // size too big
+	f.Add(entry(onePack(1, len(body)-1, body)))                   // size too small
+	f.Add(entry(onePack(1, MaxObject+1, nil)))                    // over the bound
+	f.Add(entry(onePack(1, MaxObject, nil)))                      // at the bound, no body
+	f.Add(entry(onePack(3, len(body), body)))                     // a blob
+	f.Add([]byte{0x91, 0x80, 0x80, 0x80, 0x01})                   // five-byte size, no body
+	f.Add([]byte{0x90, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}) // over-long size
+	f.Add([]byte{0x1f, 'x', 0x9c, 0xff})                          // size 15, a broken zlib stream
 	f.Fuzz(func(t *testing.T, in []byte) {
-		raw, err := readCommitPack(bytes.NewReader(in), strings.Repeat("a", 40))
-		if err == nil && len(raw) >= MaxObject {
-			t.Fatalf("a commit of %d bytes accepted", len(raw))
+		pack := rawPack(in)
+		var wire bytes.Buffer
+		w := pktline.NewWriter(&wire)
+		_ = w.Text("packfile")
+		for p := pack; len(p) > 0; {
+			n := min(len(p), 1000)
+			_ = w.Sideband(1, p[:n])
+			p = p[n:]
 		}
-		raw, err = parseCommitPack(in, 40)
-		if err == nil && len(raw) >= MaxObject {
-			t.Fatalf("a commit of %d bytes accepted", len(raw))
+		_ = w.Flush()
+		for _, run := range []func() ([]byte, error){
+			func() ([]byte, error) { return parseCommitPack(pack, 40) },
+			func() ([]byte, error) { return readCommitPack(bytes.NewReader(wire.Bytes()), strings.Repeat("a", 40)) },
+			func() ([]byte, error) { return readCommitPack(bytes.NewReader(in), strings.Repeat("a", 40)) },
+			func() ([]byte, error) { return parseCommitPack(in, 40) },
+		} {
+			if raw, err := run(); err == nil && len(raw) > MaxObject {
+				t.Fatalf("a commit of %d bytes accepted", len(raw))
+			}
 		}
 	})
 }

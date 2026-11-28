@@ -83,8 +83,11 @@ func (c *Client) fetchCommit(ctx context.Context, repo, id string) ([]byte, erro
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 		return nil, statusError(resp, b)
 	}
-	raw, err := readCommitPack(io.LimitReader(resp.Body, maxFetchWire+1), id)
+	lr := &io.LimitedReader{R: resp.Body, N: maxFetchWire + 1}
+	raw, err := readCommitPack(lr, id)
 	switch {
+	case lr.N <= 0: // the answer ran past the wire bound, whatever was read of it
+		return nil, aerr.New(aerr.BoundExceeded, "upstream answer larger than "+strconv.Itoa(maxFetchWire)+" bytes")
 	case err == nil:
 		return raw, nil
 	case errors.Is(err, errBlobTooLarge):
@@ -199,7 +202,7 @@ func parseCommitPack(pack []byte, idLen int) ([]byte, error) {
 		i++
 		size |= uint64(c&0x7f) << shift
 	}
-	if size >= MaxObject {
+	if size > MaxObject { // DecodeCommit refuses len(raw) > MaxObject: the same bound
 		return nil, errBlobTooLarge
 	}
 	br := bytes.NewReader(body[i:])

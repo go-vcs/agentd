@@ -129,10 +129,18 @@ func checkBaseURL(s, what string) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return nil, errors.New(what + ": not a URL")
 	}
+	// A base URL is joined with a path and carries a token: credentials in it
+	// would leak into logs, a query or fragment would be glued into every request.
+	if u.User != nil {
+		return nil, errors.New(what + ": must not hold credentials")
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(s, "#") {
+		return nil, errors.New(what + ": must not hold a query or a fragment")
+	}
 	switch u.Scheme {
 	case "https":
 	case "http":
-		host, _, _ := net.SplitHostPort(u.Host)
+		host := u.Hostname()
 		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 			return nil, errors.New(what + ": http is allowed on loopback only")
 		}
